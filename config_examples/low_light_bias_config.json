@@ -1,0 +1,25 @@
+{
+  "dvs": {
+    "enabled": true,
+    "threshold": 171,
+    "eventFrameTime": 10,
+    "saveEventData": true,
+    "saveVisualizationImages": true,
+    "visualizationMode": "accumulate",
+    "accumulationTime": 20,
+    "binPath": "./bin/",
+    "imgPath": "./img/",
+    "width": 1280,
+    "height": 720,
+    "biases": {
+      "enabled": true,
+      "bias_diff": 0,
+      "bias_diff_on": -10,
+      "bias_diff_off": -10,
+      "bias_fo": 10,
+      "bias_hpf": 5,
+      "bias_refr": -5,
+      "comment": "低光照环境配置 - 降低对比度阈值，减少滤波，缩短不应期以提高灵敏度"
+    }
+  }
+} 

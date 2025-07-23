@@ -1,0 +1,25 @@
+{
+  "dvs": {
+    "enabled": true,
+    "threshold": 171,
+    "eventFrameTime": 10,
+    "saveEventData": true,
+    "saveVisualizationImages": true,
+    "visualizationMode": "accumulate",
+    "accumulationTime": 20,
+    "binPath": "./bin/",
+    "imgPath": "./img/",
+    "width": 1280,
+    "height": 720,
+    "biases": {
+      "enabled": true,
+      "bias_diff": 0,
+      "bias_diff_on": 15,
+      "bias_diff_off": 15,
+      "bias_fo": -10,
+      "bias_hpf": 30,
+      "bias_refr": 50,
+      "comment": "高噪声环境配置 - 提高对比度阈值，增强滤波，延长不应期以减少噪声"
+    }
+  }
+} 

@@ -1,0 +1,134 @@
+{
+  "controls": {
+    "dv": true,
+    "dvs_view": true,
+    "dv_view": true,
+    "playback": false
+  },
+  "fontPointSize": 24,
+  "fpn": "FPN_2.txt",
+  "autoStart": {
+    "camera": false,
+    "detection": false,
+    "recording": false,
+    "recordingWithDetection": true
+  },  
+  "recordingOptions": {
+    "basePath": "/media/pe/My Passport/auto_batch_test",
+    "saveDVOriginal": true,
+    "saveDVCropped": true,
+    "saveDVSImages": true,
+    "saveDVSRaw": true,
+    "createTimestampFolders": true,
+    "saveDetectionResults": true
+  },
+  "detection": {
+    "enabled": false,
+    "saveDetectionImages": true,
+    "detectionImagePath": "detection_results",
+    "time_window_ms": 100,
+    "output_file": "detection_results.txt",
+    "models": {
+      "dv_model_path": "models/dv.pt",
+      "dvs_model_path": "models/dvs.pt"
+    },
+    "parameters": {
+      "dv": {
+        "confidence_threshold": 0.45,
+        "iou_threshold": 0.2,
+        "input_width": 640,
+        "input_height": 384,
+        "num_classes": 10
+      },
+      "dvs": {
+        "confidence_threshold": 0.45,
+        "iou_threshold": 0.2,
+        "input_width": 640,
+        "input_height": 384,
+        "num_classes": 10
+      }
+    }
+  },
+  "dvDisplay": {
+    "mode": "cropped",
+    "crop": {
+      "enabled": true,
+      "x": 2000,
+      "y": 1000,
+      "width": 1280,
+      "height": 720
+    },
+    "rotation": {
+      "enabled": true,
+      "angle": 0.0,
+      "border_mode": "reflect",
+      "interpolation": "linear"
+    },
+    "save": {
+      "enabled": true,
+      "path": "saved_crops"
+    }
+  },
+  "saveOptions": {
+    "saveDVSBin": true,
+    "saveDVSImg": true,
+    "saveDV": true,
+    "savePath": "recording"
+  },
+  "playbackOptions": {
+    "enabled": true,
+    "mode": "both",
+    "dvsEnabled": true,
+    "dvEnabled": true
+  },
+  "dvs": {
+    "enabled": true,
+    "threshold": 171,
+    "eventFrameTime": 10,
+    "saveEventData": true,
+    "saveVisualizationImages": true,
+    "visualizationMode": "accumulate",
+    "accumulationTime": 20,
+    "binPath": "./bin/",
+    "imgPath": "./img/",
+    "width": 1280,
+    "height": 720,
+    "biases": {
+      "enabled": true,
+      "bias_diff": 0,
+      "bias_diff_on": 0,
+      "bias_diff_off": 0,
+      "bias_fo": 0,
+      "bias_hpf": 0,
+      "bias_refr": 0,
+      "comment": "Prophesee DVS camera bias settings. Values are relative offsets for IMX636 sensor. Set enabled to false to use default biases."
+    }
+  },
+  "dv": {
+    "enabled": true,
+    "fps": 20,
+    "width": 1280,
+    "height": 720,
+    "horizontalFlip": true,
+    "verticalFlip": false
+  },
+  "autoRecording": {
+    "enabled": true,
+    "totalDiscs": 25,
+    "positions": {
+      "x1": 22000,
+      "x2": 24000,
+      "x3": 26000,
+      "y": 25000
+    },
+    "rotationSpeed": 1000,
+    "recordingTypes": {
+      "dv_cropped": true,
+      "dv_original": true,
+      "dvs_images": true,
+      "dvs_raw": true
+    },
+    "basePath": "/media/pe/My Passport/auto_batch_test",
+    "comment": "慢速旋转配置 - 适用于精密操作和高质量录制，旋转速度设置为1000"
+  }
+} 

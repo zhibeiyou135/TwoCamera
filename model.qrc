@@ -1,0 +1,6 @@
+<RCC>
+    <qresource>
+        <file>FPN_2.txt</file>
+        <file>config.json</file>
+    </qresource>
+</RCC>

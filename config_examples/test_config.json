@@ -1,0 +1,39 @@
+{
+  "camera": {
+    "autoStart": false,
+    "mirrorHorizontal": true,
+    "mirrorVertical": false,
+    "fps": 10
+  },
+  "dvs": {
+    "autoStart": false,
+    "eventFrameTime": 20,
+    "accumulationTime": 50,
+    "fps": 10
+  },
+  "detection": {
+    "enabled": false,
+    "autoStart": false,
+    "dvModelPath": "./test_models/dv_test.pt",
+    "dvsModelPath": "./test_models/dvs_test.pt"
+  },
+  "recordingOptions": {
+    "basePath": "./test_recordings",
+    "saveDVImages": true,
+    "saveDVSImages": false,
+    "saveDVSRaw": false,
+    "imageFormat": "jpg"
+  },
+  "autoRecording": {
+    "enabled": false,
+    "totalDiscs": 2,
+    "basePath": "./test_auto_batch",
+    "positions": {
+      "x1": 500,
+      "x2": 1000,
+      "x3": 1500,
+      "y": 800
+    },
+    "rotationSpeed": 50
+  }
+} 

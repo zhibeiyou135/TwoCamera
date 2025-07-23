@@ -1,0 +1,46 @@
+{
+  "controls": {
+    "dv": true,
+    "dvs_view": true,
+    "dv_view": true
+  },
+  "fontPointSize": 24,
+  "fpn": "FPN_2.txt",
+  "dvDisplay": {
+    "mode": "cropped", 
+    "crop": {
+      "enabled": true,
+      "x": 100,
+      "y": 50,
+      "width": 640,
+      "height": 480
+    },
+    "save": {
+      "enabled": true,
+      "path": "saved_crops"
+    }
+  },
+   "saveOptions": {
+    "saveDVSBin": true,
+    "saveDVSImg": true,
+    "saveDV": true
+  },
+  "autoRecording": {
+    "enabled": true,
+    "totalDiscs": 25,
+    "positions": {
+      "x1": 19000,
+      "x2": 24000,
+      "x3": 29000,
+      "y": 23000
+    },
+    "rotationSpeed": 2500,
+    "recordingTypes": {
+      "dv_cropped": true,
+      "dv_original": true,
+      "dvs_images": true,
+      "dvs_raw": true
+    },
+    "basePath": "/home/pe/recordings/auto_batch"
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "camera": {
+    "autoStart": true,
+    "mirrorHorizontal": false,
+    "mirrorVertical": false,
+    "fps": 20
+  },
+  "dvs": {
+    "autoStart": true,
+    "eventFrameTime": 10,
+    "accumulationTime": 20,
+    "fps": 20
+  },
+  "detection": {
+    "enabled": true,
+    "autoStart": true,
+    "dvModelPath": "./models/dv.pt",
+    "dvsModelPath": "./models/dvs.pt"
+  },
+  "recordingOptions": {
+    "basePath": "/media/pe/My Passport/production_recordings",
+    "saveDVImages": true,
+    "saveDVSImages": true,
+    "saveDVSRaw": true,
+    "imageFormat": "png"
+  },
+  "autoRecording": {
+    "enabled": false,
+    "totalDiscs": 10,
+    "basePath": "/media/pe/My Passport/production_auto_batch",
+    "positions": {
+      "x1": 1000,
+      "x2": 2000,
+      "x3": 3000,
+      "y": 1500
+    },
+    "rotationSpeed": 100
+  }
+} 

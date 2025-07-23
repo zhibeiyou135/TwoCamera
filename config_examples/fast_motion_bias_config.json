@@ -1,0 +1,25 @@
+{
+  "dvs": {
+    "enabled": true,
+    "threshold": 171,
+    "eventFrameTime": 10,
+    "saveEventData": true,
+    "saveVisualizationImages": true,
+    "visualizationMode": "accumulate",
+    "accumulationTime": 20,
+    "binPath": "./bin/",
+    "imgPath": "./img/",
+    "width": 1280,
+    "height": 720,
+    "biases": {
+      "enabled": true,
+      "bias_diff": 0,
+      "bias_diff_on": 5,
+      "bias_diff_off": 5,
+      "bias_fo": 20,
+      "bias_hpf": 60,
+      "bias_refr": 10,
+      "comment": "快速运动场景配置 - 适中的对比度阈值，增强高频响应，过滤慢速变化"
+    }
+  }
+} 
