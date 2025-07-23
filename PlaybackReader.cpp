@@ -367,13 +367,13 @@ void PlaybackReader::playDVwithoutDVS(QList<QFileInfo> dvImgs) {
     return;
   }
   
-  // 创建空白DVS图像
-  QImage dvsImg(1280, 720, QImage::Format_Grayscale8);
-  dvsImg.fill(0);
+  // 创建空白DVS图像，使用RGB格式以匹配真实DVS相机的输出
+  QImage dvsImg(1280, 720, QImage::Format_RGB888);
+  dvsImg.fill(Qt::black);
   
   // 获取第一张DV图像
   QFileInfo currentImgInfo = dvImgs.front();
-  QImage dvImg(currentImgInfo.absoluteFilePath());
+  QImage dvImg = loadAndProcessDVImage(currentImgInfo.absoluteFilePath());
   
   // 从文件名中提取时间戳，处理_cropped后缀
   QString baseName = currentImgInfo.baseName();
@@ -589,9 +589,9 @@ void PlaybackReader::playRawFileDirectly(const QString &rawFilePath) {
     // 使用Metavision SDK打开RAW文件
     auto camera = Metavision::Camera::from_file(rawFilePath.toStdString());
     
-    // 创建UI显示图像
-    QImage dvsImage(1280, 720, QImage::Format_Grayscale8);
-    dvsImage.fill(0);
+    // 创建UI显示图像，使用RGB格式以匹配真实DVS相机的输出
+    QImage dvsImage(1280, 720, QImage::Format_RGB888);
+    dvsImage.fill(Qt::black);
     
     // 创建空白DV图像作为占位符
     QImage dvImage(1280, 720, QImage::Format_RGB888);
@@ -681,9 +681,9 @@ void PlaybackReader::playRawFileDirectly(const QString &rawFilePath) {
       qDebug() << "无法解析RAW文件头，使用默认参数";
     }
     
-    // 初始化图像
-    QImage dvsImage(rawMetadata.width, rawMetadata.height, QImage::Format_Grayscale8);
-    dvsImage.fill(0);
+    // 初始化图像，使用RGB格式以匹配真实DVS相机的输出
+    QImage dvsImage(rawMetadata.width, rawMetadata.height, QImage::Format_RGB888);
+    dvsImage.fill(Qt::black);
     
     // 创建空白DV图像作为占位符
     QImage dvImage(rawMetadata.width, rawMetadata.height, QImage::Format_RGB888);
@@ -740,8 +740,9 @@ void PlaybackReader::playRawFileDirectly(const QString &rawFilePath) {
         if (event.x >= 0 && event.x < rawMetadata.width && 
             event.y >= 0 && event.y < rawMetadata.height) {
           // 根据事件极性(g)设置像素颜色，正极性为白色，负极性为灰色
-          uchar pixelValue = (event.g == 1) ? 255 : 128;
-          dvsImage.setPixel(event.x, event.y, pixelValue);
+          // 现在使用RGB格式，需要设置RGB值
+          QRgb pixelColor = (event.g == 1) ? qRgb(255, 255, 255) : qRgb(128, 128, 128);
+          dvsImage.setPixel(event.x, event.y, pixelColor);
         }
         
         // 更新当前时间戳
@@ -764,7 +765,7 @@ void PlaybackReader::playRawFileDirectly(const QString &rawFilePath) {
         QThread::msleep(40);
         
         // 清除图像准备下一帧
-        dvsImage.fill(0);
+        dvsImage.fill(Qt::black);
       }
       
       frameCount++;
@@ -908,7 +909,7 @@ void PlaybackReader::playbackWithDVImages() {
         // 创建DV图像
         QImage dvImage;
         if (dvImageIndex < totalDvImages) {
-          dvImage = QImage(dvImages[dvImageIndex].absoluteFilePath());
+          dvImage = loadAndProcessDVImage(dvImages[dvImageIndex].absoluteFilePath());
           dvImageIndex = (dvImageIndex + 1) % totalDvImages;  // 循环播放DV图像
         }
         
@@ -1073,7 +1074,7 @@ void PlaybackReader::playRAWWithDVImages(const QString &rawFilePath, QList<QFile
 
     // 初始化第一张DV图像
     if (dvImageIndex < dvImgs.size()) {
-      currentDVImage = QImage(dvImgs[dvImageIndex].absoluteFilePath());
+      currentDVImage = loadAndProcessDVImage(dvImgs[dvImageIndex].absoluteFilePath());
       qDebug() << "初始DV图像:" << dvImgs[dvImageIndex].fileName();
     }
 
@@ -1129,7 +1130,7 @@ void PlaybackReader::playRAWWithDVImages(const QString &rawFilePath, QList<QFile
       // 更新DV图像（如果找到更匹配的）
       if (targetDVIndex >= 0 && targetDVIndex != dvImageIndex) {
         dvImageIndex = targetDVIndex;
-        currentDVImage = QImage(dvImgs[dvImageIndex].absoluteFilePath());
+        currentDVImage = loadAndProcessDVImage(dvImgs[dvImageIndex].absoluteFilePath());
 
         static int logCount = 0;
         if (logCount++ % 30 == 0) { // 每30帧打印一次日志
@@ -1246,6 +1247,28 @@ QList<QFileInfo> PlaybackReader::loadDVImages(const QString &folderPath) {
   qDebug() << "Found" << fileList.size() << "image files in DV folder";
 
   return fileList;
+}
+
+// 加载并处理DV图像，应用与海康相机相同的颜色处理
+QImage PlaybackReader::loadAndProcessDVImage(const QString &imagePath) {
+  // 加载原始图像
+  QImage originalImg(imagePath);
+
+  if (originalImg.isNull()) {
+    qDebug() << "无法加载DV图像:" << imagePath;
+    return QImage();
+  }
+
+  // 确保图像格式为RGB888，模仿海康相机的输出格式
+  if (originalImg.format() != QImage::Format_RGB888) {
+    originalImg = originalImg.convertToFormat(QImage::Format_RGB888);
+  }
+
+  // 注意：这里不应用海康相机的颜色校正，因为DV图像已经是处理过的图像文件
+  // 海康相机的颜色校正是针对Bayer格式的原始数据，而DV图像文件已经是RGB格式
+
+  qDebug() << "成功加载DV图像:" << imagePath << "尺寸:" << originalImg.size();
+  return originalImg;
 }
 
 QList<PlaybackReader::SessionInfo> PlaybackReader::collectSessionFolders(const QString &rootDir) {

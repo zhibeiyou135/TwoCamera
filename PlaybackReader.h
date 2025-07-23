@@ -119,6 +119,9 @@ private:
   // 加载DV文件夹中的图像
   QList<QFileInfo> loadDVImages(const QString &folderPath);
 
+  // 加载并处理DV图像，应用与海康相机相同的颜色处理
+  QImage loadAndProcessDVImage(const QString &imagePath);
+
   // Event结构体定义（用于RAW文件解析）
   struct Event {
     int x, y;

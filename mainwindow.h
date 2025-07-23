@@ -23,6 +23,12 @@ class DetectModule_DV;
 class DetectModule_DVS;
 class DualCameraResultManager;
 
+// 显示模式枚举
+enum class DisplayMode {
+  CAMERA_VIEW,    // 显示原始相机画面
+  DETECTION_VIEW  // 显示带检测框的检测结果画面
+};
+
 class MainWindow : public QMainWindow {
   Q_OBJECT
 public:
@@ -61,7 +67,20 @@ signals:
   
 private slots:
   void updateDVSView(QImage img);
-  
+
+  // 统一的检测处理槽函数
+  void processDVImageForDetection(cv::Mat img);
+  void processDVSImageForDetection(QImage img);
+
+  // 统一的图像格式转换工具方法
+  std::shared_ptr<cv::Mat> convertQImageToBGRMat(const QImage& img);
+
+  // 显示状态管理器方法
+  void updateCameraDisplay(const QImage& img, const QString& cameraType);
+  void updateDetectionDisplay(const QImage& img, const QString& cameraType);
+  QImage applyImageProcessing(const QImage& img, const QString& cameraType);
+  bool shouldUpdateDisplay(const QString& cameraType);
+
   // 检测相关槽函数
   void updateDVDetectionView(QImage img);
   void updateDVSDetectionView(QImage img);
@@ -70,6 +89,9 @@ private slots:
   void onFinalDecision(QString decision, QDateTime timestamp);
   void onDetectionToggled(bool enabled);
   void onModelLoadResult(bool success, QString message);
+
+  // 检测状态管理方法
+  void updateDetectionStatusLabels(bool enabled);
   
   // 新增三种类型录制的槽函数
   void handleStartMaxRecord();
@@ -136,6 +158,14 @@ private:
   
   // 检测使能标志
   bool detectionEnabled = false;
+
+  // 显示状态管理器相关成员
+  DisplayMode currentDisplayMode = DisplayMode::CAMERA_VIEW;
+  QElapsedTimer dvDisplayTimer;
+  QElapsedTimer dvsDisplayTimer;
+  bool dvDisplayTimerInitialized = false;
+  bool dvsDisplayTimerInitialized = false;
+  static constexpr int DISPLAY_UPDATE_INTERVAL_MS = 15;
   
   // 添加三个录制按钮的指针
   QPushButton *maxRecordButton;

@@ -36,6 +36,9 @@
 #include <QFile>
 #include "camera/ConfigManager.h"
 
+// 注册cv::Mat类型以支持Qt信号槽系统
+Q_DECLARE_METATYPE(cv::Mat)
+
 struct Block {
   std::vector<uint8_t> data;
   uint64_t timeStamp;
@@ -49,7 +52,10 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
 #ifdef PROFILE
   ProfilerStart("camera.prof");
 #endif
-  
+
+  // 注册cv::Mat类型以支持Qt信号槽系统
+  qRegisterMetaType<cv::Mat>("cv::Mat");
+
   // 加载录制配置
   loadRecordingConfigFromJson(ConfigManager::getInstance().getConfigPath());
   
@@ -490,28 +496,33 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
             }
           });
           
-  // 连接回放图像信号，显示在UI上
+  // 连接回放图像信号，使用统一的显示管理器
   connect(PlaybackReader::getInstance(), &PlaybackReader::nextImagePair, this,
           [this](QImage dvImg, QImage dvsImg) {
-            // 显示DV图像
-            if (this->videoView && !dvImg.isNull()) {
-              auto configInstance = CameraConfig::getInstance();
-              QImage processedDvImg = dvImg.mirrored(
-                  configInstance.getDVViewHorizontalFlip(),
-                  configInstance.getDVViewVerticalFlip());
-              this->videoView->setPixmap(QPixmap::fromImage(processedDvImg.scaledToWidth(this->videoView->width())));
+            // 回放时临时保存当前显示模式
+            DisplayMode originalMode = currentDisplayMode;
+
+            // 回放时强制使用相机视图模式以确保图像显示
+            currentDisplayMode = DisplayMode::CAMERA_VIEW;
+
+            // 使用统一的显示管理器处理DV图像
+            if (!dvImg.isNull()) {
+              QMetaObject::invokeMethod(this, "updateCameraDisplay",
+                                       Qt::QueuedConnection,
+                                       Q_ARG(QImage, dvImg),
+                                       Q_ARG(QString, "DV"));
             }
-            
-            // 显示DVS图像
-            if (this->dvsView && !dvsImg.isNull()) {
-              auto configInstance = CameraConfig::getInstance();
-              QImage processedDvsImg = dvsImg.mirrored(
-                  configInstance.getDVSViewHorizontalFlip(),
-                  configInstance.getDVSViewVerticalFlip());
-              this->dvsView->setPixmap(QPixmap::fromImage(processedDvsImg.scaledToWidth(this->dvsView->width())));
+
+            // 使用统一的显示管理器处理DVS图像
+            if (!dvsImg.isNull()) {
+              QMetaObject::invokeMethod(this, "updateCameraDisplay",
+                                       Qt::QueuedConnection,
+                                       Q_ARG(QImage, dvsImg),
+                                       Q_ARG(QString, "DVS"));
             }
-            
-            qDebug() << "回放图像已更新 - DV:" << dvImg.size() << " DVS:" << dvsImg.size();
+
+            // 恢复原始显示模式
+            currentDisplayMode = originalMode;
           });
 
   // 连接选择录制文件按钮
@@ -622,94 +633,41 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
             [this](cv::Mat *img) {
               qDebug() << "DV图像接收 - 线程ID:" << QThread::currentThreadId();
               qDebug() << "DV图像接收 - 指针地址:" << (void*)img;
-              
+
               if (!img) {
                 qDebug() << "DV检测: 图像指针为空";
                 return;
               }
-              
+
               // 立即进行深拷贝以避免多线程问题
               cv::Mat safeCopy;
               try {
                 img->copyTo(safeCopy);
-                qDebug() << "DV图像深拷贝成功 - 尺寸:" << safeCopy.rows << "x" << safeCopy.cols 
+                qDebug() << "DV图像深拷贝成功 - 尺寸:" << safeCopy.rows << "x" << safeCopy.cols
                          << "类型:" << safeCopy.type() << "通道:" << safeCopy.channels();
               } catch (const cv::Exception& e) {
                 qDebug() << "DV图像深拷贝失败:" << e.what();
                 delete img;  // 清理原始指针
                 return;
               }
-              
+
               // 清理原始指针
               delete img;
-              
-              // 显示图像
-              auto qimg =
-                  QImage(
-                      safeCopy.data, safeCopy.cols, safeCopy.rows, safeCopy.step, QImage::Format_RGB888)
-                      .scaledToWidth(this->videoView->width());
-              auto configInstance = CameraConfig::getInstance();
-              qimg = qimg.mirrored(configInstance.getDVViewHorizontalFlip(),
-                            configInstance.getDVViewVerticalFlip());
-              
-              // 显示逻辑：如果检测功能未启用，显示相机画面；如果检测功能启用，让检测结果来更新显示
-              if (!detectionEnabled) {
-              this->videoView->setPixmap(QPixmap::fromImage(qimg));
-              }
-              
-              // 如果检测功能启用，将图像传递给检测模块
-              if (detectionEnabled && dvDetector) {
-                // 使用深拷贝的图像进行检测
-                if (safeCopy.empty() || !safeCopy.data || safeCopy.rows <= 0 || safeCopy.cols <= 0) {
-                  qDebug() << "DV检测: 深拷贝图像无效";
-                  return;
-                }
-                
-                try {
-                  // 检查图像类型和格式
-                  qDebug() << "DV检测: 输入图像检查 - 类型:" << safeCopy.type() 
-                           << "通道:" << safeCopy.channels() 
-                           << "深度:" << safeCopy.depth()
-                           << "尺寸:" << safeCopy.rows << "x" << safeCopy.cols;
-                  
-                  // 检查图像是否为有效的8位图像
-                  if (safeCopy.depth() != CV_8U) {
-                    qDebug() << "DV检测: 不支持的图像深度:" << safeCopy.depth() << "，需要CV_8U(" << CV_8U << ")";
-                    return;
-                  }
-                  
-                  if (safeCopy.channels() != 3) {
-                    qDebug() << "DV检测: 不支持的图像通道数:" << safeCopy.channels() << "，需要3通道";
-                    return;
-                  }
-                  
-                  qDebug() << "DV检测: 准备进行检测 - 尺寸:" << safeCopy.rows << "x" << safeCopy.cols;
-                  
-                  // 创建要检测的图像副本
-                  cv::Mat detectImg;
-                  safeCopy.copyTo(detectImg);
-                  
-                  // 检查转换后的图像
-                  if (detectImg.empty() || !detectImg.data) {
-                    qDebug() << "DV检测: 检测图像副本创建失败";
-                    return;
-                  }
-                  
-                  qDebug() << "  图像信息: 类型=" << detectImg.type() << " 尺寸=" << detectImg.rows << "x" << detectImg.cols
-                           << " 通道=" << detectImg.channels() << " 深度=" << detectImg.depth();
-                  
-                  // 使用shared_ptr管理内存，确保线程安全
-                  std::shared_ptr<cv::Mat> imgPtr = std::make_shared<cv::Mat>(detectImg);
-                  dvDetector->enqueue(imgPtr);
-                  
-                } catch (const cv::Exception& e) {
-                  qDebug() << "DV检测OpenCV异常:" << e.what();
-                  qDebug() << "  错误代码:" << e.code << " 函数:" << e.func.c_str() << " 文件:" << e.file.c_str() << " 行:" << e.line;
-                } catch (const std::exception& e) {
-                  qDebug() << "DV检测图像处理异常:" << e.what();
-                } catch (...) {
-                  qDebug() << "DV检测图像处理未知异常";
-                }
+
+              // 转换为QImage用于显示
+              QImage qimg(safeCopy.data, safeCopy.cols, safeCopy.rows, safeCopy.step, QImage::Format_RGB888);
+
+              // 使用统一的显示管理器更新相机画面（线程安全）
+              QMetaObject::invokeMethod(this, "updateCameraDisplay",
+                                       Qt::QueuedConnection,
+                                       Q_ARG(QImage, qimg),
+                                       Q_ARG(QString, "DV"));
+
+              // 如果检测功能启用，将图像传递给独立的检测处理方法
+              if (detectionEnabled) {
+                // 使用Qt::QueuedConnection确保线程安全，统一架构
+                QMetaObject::invokeMethod(this, "processDVImageForDetection",
+                                         Qt::QueuedConnection, Q_ARG(cv::Mat, safeCopy));
               }
             }, Qt::QueuedConnection);
     
@@ -924,107 +882,252 @@ void MainWindow::closeEvent(QCloseEvent *event) {
 #endif
 }
 void MainWindow::updateDVSView(QImage img) {
-  // 使用简单的更新限制，而不是完全阻止更新
-  static QElapsedTimer updateTimer;
-  
-  // 初始化计时器
-  if (!updateTimer.isValid()) {
-    updateTimer.start();
-    return;
+  // 使用统一的显示管理器更新相机画面
+  updateCameraDisplay(img, "DVS");
+
+  // 如果检测功能启用，将图像传递给独立的检测处理方法
+  if (detectionEnabled) {
+    // 使用Qt::QueuedConnection确保线程安全
+    QMetaObject::invokeMethod(this, "processDVSImageForDetection",
+                             Qt::QueuedConnection, Q_ARG(QImage, img));
   }
-  
-  // 基本限流，每15ms最多更新一次，但不会完全阻止更新
-  if (updateTimer.elapsed() < 15) {
-    return;
+}
+
+// 统一的图像格式转换工具方法
+std::shared_ptr<cv::Mat> MainWindow::convertQImageToBGRMat(const QImage& img) {
+  if (img.isNull() || img.width() <= 0 || img.height() <= 0) {
+    return nullptr;
   }
-  updateTimer.restart();
-  
-  // 直接在主线程处理图像，简化流程
-  auto configInstance = CameraConfig::getInstance();
-  QImage processedImg = img.mirrored(
-      configInstance.getDVSViewHorizontalFlip(),
-      configInstance.getDVSViewVerticalFlip());
-  
-  // 显示逻辑：如果检测功能未启用，显示相机画面；如果检测功能启用，让检测结果来更新显示
-  if (!detectionEnabled) {
-  this->dvsView->setPixmap(
-      QPixmap::fromImage(processedImg).scaledToWidth(this->dvsView->width()));
-  }
-      
-  // 如果检测功能启用，将图像传递给DVS检测模块
-  if (detectionEnabled && dvsDetector) {
-    // 检查图像是否有效
-    if (!img.isNull() && img.width() > 0 && img.height() > 0) {
-      try {
-        // 确保图像格式为RGB888
-        QImage rgbImg = img.convertToFormat(QImage::Format_RGB888);
-        
-        // 检查转换是否成功
-        if (rgbImg.isNull() || rgbImg.width() <= 0 || rgbImg.height() <= 0) {
-          qDebug() << "DVS检测: 图像格式转换失败";
-          return;
-        }
-        
-        // 创建cv::Mat的安全方式
-        cv::Mat detectImg(rgbImg.height(), rgbImg.width(), CV_8UC3);
-        
-        // 检查cv::Mat是否创建成功
-        if (detectImg.empty() || !detectImg.data) {
-          qDebug() << "DVS检测: cv::Mat创建失败";
-          return;
-        }
-        
-        // 手动复制数据，避免内存管理问题
-        bool copySuccess = true;
-        try {
-          for (int y = 0; y < rgbImg.height(); ++y) {
-            const uchar* srcLine = rgbImg.constScanLine(y);
-            uchar* dstLine = detectImg.ptr<uchar>(y);
-            if (!srcLine || !dstLine) {
-              copySuccess = false;
-              break;
-            }
-            for (int x = 0; x < rgbImg.width(); ++x) {
-              // RGB -> BGR
-              dstLine[x * 3 + 0] = srcLine[x * 3 + 2]; // B
-              dstLine[x * 3 + 1] = srcLine[x * 3 + 1]; // G
-              dstLine[x * 3 + 2] = srcLine[x * 3 + 0]; // R
-            }
-          }
-        } catch (...) {
-          copySuccess = false;
-        }
-        
-        if (!copySuccess) {
-          qDebug() << "DVS检测: 数据复制失败";
-          return;
-        }
-        
-        // 使用shared_ptr管理内存，确保线程安全
-        std::shared_ptr<cv::Mat> imgPtr = std::make_shared<cv::Mat>(detectImg.clone());
-        
-        // 检查克隆是否成功
-        if (!imgPtr || imgPtr->empty()) {
-          qDebug() << "DVS检测: 图像克隆失败";
-          return;
-        }
-        
-        dvsDetector->enqueue(imgPtr);
-        
-      } catch (const cv::Exception& e) {
-        qDebug() << "DVS检测OpenCV异常:" << e.what();
-      } catch (const std::exception& e) {
-        qDebug() << "DVS检测图像处理异常:" << e.what();
-      } catch (...) {
-        qDebug() << "DVS检测图像处理未知异常";
-      }
-    } else {
-      qDebug() << "DVS检测: 跳过无效图像 - 尺寸:" << img.width() << "x" << img.height();
+
+  try {
+    // 确保图像格式为RGB888
+    QImage rgbImg = img.convertToFormat(QImage::Format_RGB888);
+
+    // 检查转换是否成功
+    if (rgbImg.isNull() || rgbImg.width() <= 0 || rgbImg.height() <= 0) {
+      return nullptr;
     }
+
+    // 创建cv::Mat的安全方式
+    cv::Mat detectImg(rgbImg.height(), rgbImg.width(), CV_8UC3);
+
+    // 检查cv::Mat是否创建成功
+    if (detectImg.empty() || !detectImg.data) {
+      return nullptr;
+    }
+
+    // 手动复制数据，避免内存管理问题
+    bool copySuccess = true;
+    try {
+      for (int y = 0; y < rgbImg.height(); ++y) {
+        const uchar* srcLine = rgbImg.constScanLine(y);
+        uchar* dstLine = detectImg.ptr<uchar>(y);
+        if (!srcLine || !dstLine) {
+          copySuccess = false;
+          break;
+        }
+        for (int x = 0; x < rgbImg.width(); ++x) {
+          // RGB -> BGR
+          dstLine[x * 3 + 0] = srcLine[x * 3 + 2]; // B
+          dstLine[x * 3 + 1] = srcLine[x * 3 + 1]; // G
+          dstLine[x * 3 + 2] = srcLine[x * 3 + 0]; // R
+        }
+      }
+    } catch (...) {
+      copySuccess = false;
+    }
+
+    if (!copySuccess) {
+      return nullptr;
+    }
+
+    // 使用shared_ptr管理内存，确保线程安全
+    return std::make_shared<cv::Mat>(detectImg.clone());
+
+  } catch (const cv::Exception& e) {
+    qDebug() << "图像格式转换OpenCV异常:" << e.what();
+    return nullptr;
+  } catch (const std::exception& e) {
+    qDebug() << "图像格式转换异常:" << e.what();
+    return nullptr;
+  } catch (...) {
+    qDebug() << "图像格式转换未知异常";
+    return nullptr;
   }
-      
-  // 输出调试信息
-  qDebug() << "DVS view updated: " << processedImg.width() << "x" << processedImg.height();
+}
+
+// ==================== 显示状态管理器实现 ====================
+
+// 检查是否应该更新显示（帧率限制）
+bool MainWindow::shouldUpdateDisplay(const QString& cameraType) {
+  QElapsedTimer* timer = nullptr;
+  bool* timerInitialized = nullptr;
+
+  if (cameraType == "DV") {
+    timer = &dvDisplayTimer;
+    timerInitialized = &dvDisplayTimerInitialized;
+  } else if (cameraType == "DVS") {
+    timer = &dvsDisplayTimer;
+    timerInitialized = &dvsDisplayTimerInitialized;
+  } else {
+    return false;
+  }
+
+  // 初始化计时器
+  if (!*timerInitialized) {
+    timer->start();
+    *timerInitialized = true;
+    return false; // 第一次调用不更新，只初始化计时器
+  }
+
+  // 帧率限制：每15ms最多更新一次
+  if (timer->elapsed() < DISPLAY_UPDATE_INTERVAL_MS) {
+    return false;
+  }
+  timer->restart();
+  return true;
+}
+
+// 统一的图像处理方法（镜像翻转、缩放）
+QImage MainWindow::applyImageProcessing(const QImage& img, const QString& cameraType) {
+  if (img.isNull()) {
+    return QImage();
+  }
+
+  auto configInstance = CameraConfig::getInstance();
+  QImage processedImg;
+
+  if (cameraType == "DV") {
+    processedImg = img.mirrored(
+        configInstance.getDVViewHorizontalFlip(),
+        configInstance.getDVViewVerticalFlip());
+  } else if (cameraType == "DVS") {
+    processedImg = img.mirrored(
+        configInstance.getDVSViewHorizontalFlip(),
+        configInstance.getDVSViewVerticalFlip());
+  } else {
+    processedImg = img;
+  }
+
+  return processedImg;
+}
+
+// 统一的相机画面显示更新方法
+void MainWindow::updateCameraDisplay(const QImage& img, const QString& cameraType) {
+  // 检查帧率限制
+  if (!shouldUpdateDisplay(cameraType)) {
+    return;
+  }
+
+  // 在检测模式下，只有检测结果才显示，相机画面不显示
+  // 但是如果当前显示模式是相机视图，则始终显示（用于回放等场景）
+  if (detectionEnabled && currentDisplayMode == DisplayMode::DETECTION_VIEW) {
+    return;
+  }
+
+  // 应用图像处理
+  QImage processedImg = applyImageProcessing(img, cameraType);
+  if (processedImg.isNull()) {
+    return;
+  }
+
+  // 根据相机类型更新对应的显示控件
+  QLabel* targetView = nullptr;
+  if (cameraType == "DV" && videoView) {
+    targetView = videoView;
+  } else if (cameraType == "DVS" && dvsView) {
+    targetView = dvsView;
+  }
+
+  if (targetView) {
+    targetView->setPixmap(QPixmap::fromImage(processedImg.scaledToWidth(targetView->width())));
+  }
+}
+
+// 统一的检测结果显示更新方法
+void MainWindow::updateDetectionDisplay(const QImage& img, const QString& cameraType) {
+  // 只有在检测模式下才显示检测结果
+  if (!detectionEnabled) {
+    return;
+  }
+
+  // 应用图像处理
+  QImage processedImg = applyImageProcessing(img, cameraType);
+  if (processedImg.isNull()) {
+    return;
+  }
+
+  // 根据相机类型更新对应的显示控件
+  QLabel* targetView = nullptr;
+  if (cameraType == "DV" && videoView) {
+    targetView = videoView;
+  } else if (cameraType == "DVS" && dvsView) {
+    targetView = dvsView;
+  }
+
+  if (targetView) {
+    targetView->setPixmap(QPixmap::fromImage(processedImg.scaledToWidth(targetView->width())));
+
+    // 保存检测结果图片
+    saveDetectionResultImage(img, cameraType);
+  }
+}
+
+// 独立的DV图像检测处理方法
+void MainWindow::processDVImageForDetection(cv::Mat img) {
+  if (!detectionEnabled || !dvDetector) {
+    return;
+  }
+
+  // 检查图像是否有效
+  if (img.empty() || !img.data || img.rows <= 0 || img.cols <= 0) {
+    return;
+  }
+
+  try {
+    // 检查图像是否为有效的8位图像
+    if (img.depth() != CV_8U) {
+      return;
+    }
+
+    if (img.channels() != 3) {
+      return;
+    }
+
+    // 创建要检测的图像副本
+    cv::Mat detectImg;
+    img.copyTo(detectImg);
+
+    // 检查转换后的图像
+    if (detectImg.empty() || !detectImg.data) {
+      return;
+    }
+
+    // 使用shared_ptr管理内存，确保线程安全
+    std::shared_ptr<cv::Mat> imgPtr = std::make_shared<cv::Mat>(detectImg);
+    dvDetector->enqueue(imgPtr);
+
+  } catch (const cv::Exception& e) {
+    qDebug() << "DV检测OpenCV异常:" << e.what();
+  } catch (const std::exception& e) {
+    qDebug() << "DV检测图像处理异常:" << e.what();
+  } catch (...) {
+    qDebug() << "DV检测图像处理未知异常";
+  }
+}
+
+// 独立的DVS图像检测处理方法
+void MainWindow::processDVSImageForDetection(QImage img) {
+  if (!detectionEnabled || !dvsDetector) {
+    return;
+  }
+
+  // 使用统一的图像格式转换方法
+  std::shared_ptr<cv::Mat> imgPtr = convertQImageToBGRMat(img);
+
+  if (imgPtr && !imgPtr->empty()) {
+    dvsDetector->enqueue(imgPtr);
+  }
 }
 
 void MainWindow::setEnableCrop(bool enable) {
@@ -1134,29 +1237,30 @@ void MainWindow::handleStopMinRecord() {
   }
 }
 
-// 播放回调方法（保留用于兼容性）
+// 播放回调方法（使用统一的显示管理器）
 void MainWindow::onPlaybackNewFrame(QImage frame) {
-  // 这个方法保留用于兼容性，但在递归播放模式下主要使用onPlaybackImagePair
+  // 使用统一的显示管理器处理单帧回放（主要用于DVS单独回放）
   if (!frame.isNull()) {
-    auto configInstance = CameraConfig::getInstance();
-    QImage processedImg = frame.mirrored(
-        configInstance.getDVSViewHorizontalFlip(),
-        configInstance.getDVSViewVerticalFlip());
+    // 回放时临时保存当前显示模式并强制使用相机视图
+    DisplayMode originalMode = currentDisplayMode;
+    currentDisplayMode = DisplayMode::CAMERA_VIEW;
 
-    dvsView->setPixmap(
-        QPixmap::fromImage(processedImg).scaledToWidth(dvsView->width()));
+    QMetaObject::invokeMethod(this, "updateCameraDisplay",
+                             Qt::QueuedConnection,
+                             Q_ARG(QImage, frame),
+                             Q_ARG(QString, "DVS"));
 
-    qDebug() << "Playback view updated: " << processedImg.width() << "x" << processedImg.height();
+    // 恢复原始显示模式
+    currentDisplayMode = originalMode;
   }
 }
 
 void MainWindow::onPlaybackFinished() {
-  // 在递归播放模式下，这个方法主要用于兼容性
-  qDebug() << "单个会话播放完成";
+  // 兼容性方法，主要用于单文件回放完成
 }
 
 void MainWindow::onPlaybackProgress(double progress) {
-  // 在递归播放模式下，这个方法主要用于兼容性
+  // 兼容性方法，用于单文件回放进度
   (void)progress; // 避免未使用参数的警告
 }
 
@@ -1177,116 +1281,103 @@ void MainWindow::on_selectRootPlaybackDirButton_clicked() {
 
 void MainWindow::onBatchPlaybackStarted(int totalSessions) {
   batchPlaybackStatusLabel->setText(tr("播放状态: 开始 (共%1个会话)").arg(totalSessions));
-  qDebug() << "递归播放开始，共" << totalSessions << "个会话";
 }
 
 void MainWindow::onBatchPlaybackProgress(int currentSession, int totalSessions, const QString &currentSessionName) {
   batchPlaybackStatusLabel->setText(tr("播放状态: %1/%2 - %3").arg(currentSession).arg(totalSessions).arg(currentSessionName));
-  qDebug() << "递归播放进度:" << currentSession << "/" << totalSessions << "-" << currentSessionName;
 }
 
 void MainWindow::onBatchPlaybackFinished() {
   batchPlaybackStatusLabel->setText(tr("播放状态: 已完成"));
-  qDebug() << "递归播放完成";
 
   // 恢复按钮状态
   selectRootPlaybackDirButton->setEnabled(true);
 }
 
 void MainWindow::onPlaybackImagePair(QImage dv, QImage dvs) {
-  // 显示DV图像
+  // 回放时临时保存当前显示模式并强制使用相机视图
+  DisplayMode originalMode = currentDisplayMode;
+  currentDisplayMode = DisplayMode::CAMERA_VIEW;
+
+  // 处理DV图像 - 完全模仿CameraCapture的处理流程
   if (!dv.isNull()) {
-    auto configInstance = CameraConfig::getInstance();
-    QImage processedDV = dv.mirrored(
-        configInstance.getDVViewHorizontalFlip(),
-        configInstance.getDVViewVerticalFlip());
-
-    // 如果检测功能未启用，显示原始图像
-    if (!detectionEnabled) {
-      videoView->setPixmap(QPixmap::fromImage(processedDV.scaledToWidth(videoView->width())));
-    }
-
-    // 如果检测功能启用，将DV图像传递给检测模块
-    if (detectionEnabled && dvDetector) {
-      try {
-        // 确保图像格式为RGB888
-        QImage rgbImg = dv.convertToFormat(QImage::Format_RGB888);
-
-        if (!rgbImg.isNull() && rgbImg.width() > 0 && rgbImg.height() > 0) {
-          // 创建cv::Mat
-          cv::Mat detectImg(rgbImg.height(), rgbImg.width(), CV_8UC3);
-
-          if (!detectImg.empty() && detectImg.data) {
-            // 手动复制数据，RGB -> BGR
-            for (int y = 0; y < rgbImg.height(); ++y) {
-              const uchar* srcLine = rgbImg.constScanLine(y);
-              uchar* dstLine = detectImg.ptr<uchar>(y);
-              if (srcLine && dstLine) {
-                for (int x = 0; x < rgbImg.width(); ++x) {
-                  dstLine[x * 3 + 0] = srcLine[x * 3 + 2]; // B
-                  dstLine[x * 3 + 1] = srcLine[x * 3 + 1]; // G
-                  dstLine[x * 3 + 2] = srcLine[x * 3 + 0]; // R
-                }
-              }
-            }
-
-            // 使用shared_ptr管理内存
-            std::shared_ptr<cv::Mat> imgPtr = std::make_shared<cv::Mat>(detectImg.clone());
-            dvDetector->enqueue(imgPtr);
-          }
-        }
-      } catch (const std::exception& e) {
-        qDebug() << "DV检测图像处理异常:" << e.what();
+    // 模仿CameraCapture::captureImage信号的处理流程
+    try {
+      // 将QImage转换为cv::Mat，模仿海康相机的输出格式
+      cv::Mat dvMat;
+      if (dv.format() != QImage::Format_RGB888) {
+        dv = dv.convertToFormat(QImage::Format_RGB888);
       }
+
+      // 创建cv::Mat，注意OpenCV使用BGR格式
+      dvMat = cv::Mat(dv.height(), dv.width(), CV_8UC3);
+
+      // 转换QImage(RGB)到cv::Mat(BGR) - 模仿海康相机的颜色格式
+      for (int y = 0; y < dv.height(); ++y) {
+        const uchar* srcLine = dv.constScanLine(y);
+        uchar* dstLine = dvMat.ptr<uchar>(y);
+        for (int x = 0; x < dv.width(); ++x) {
+          dstLine[x * 3 + 0] = srcLine[x * 3 + 2]; // B
+          dstLine[x * 3 + 1] = srcLine[x * 3 + 1]; // G
+          dstLine[x * 3 + 2] = srcLine[x * 3 + 0]; // R
+        }
+      }
+
+      // 应用与真实相机相同的图像处理流程
+      auto configInstance = CameraConfig::getInstance();
+
+      // 转换为RGB用于显示（模仿CameraCapture的处理）
+      cv::Mat displayMat;
+      cv::cvtColor(dvMat, displayMat, cv::COLOR_BGR2RGB);
+
+      // 创建QImage用于显示
+      QImage displayImg(displayMat.data, displayMat.cols, displayMat.rows,
+                       displayMat.step, QImage::Format_RGB888);
+
+      // 使用统一的显示管理器更新相机画面（线程安全）
+      QMetaObject::invokeMethod(this, "updateCameraDisplay",
+                               Qt::QueuedConnection,
+                               Q_ARG(QImage, displayImg),
+                               Q_ARG(QString, "DV"));
+
+      // 如果检测功能启用，将图像传递给统一的检测处理方法
+      if (detectionEnabled) {
+        // 转换为RGB格式给检测模块（模仿CameraCapture的captureImage信号）
+        cv::Mat detectMat;
+        cv::cvtColor(dvMat, detectMat, cv::COLOR_BGR2RGB);
+
+        // 使用统一的检测处理架构
+        QMetaObject::invokeMethod(this, "processDVImageForDetection",
+                                 Qt::QueuedConnection, Q_ARG(cv::Mat, detectMat));
+      }
+
+    } catch (const std::exception& e) {
+      qDebug() << "DV回放图像处理异常:" << e.what();
     }
   }
 
-  // 显示DVS图像
+  // 处理DVS图像 - 使用统一的显示管理器
   if (!dvs.isNull()) {
-    auto configInstance = CameraConfig::getInstance();
-    QImage processedDVS = dvs.mirrored(
-        configInstance.getDVSViewHorizontalFlip(),
-        configInstance.getDVSViewVerticalFlip());
+    try {
+      // 使用统一的显示管理器更新相机画面（线程安全）
+      QMetaObject::invokeMethod(this, "updateCameraDisplay",
+                               Qt::QueuedConnection,
+                               Q_ARG(QImage, dvs),
+                               Q_ARG(QString, "DVS"));
 
-    // 如果检测功能未启用，显示原始图像
-    if (!detectionEnabled) {
-      dvsView->setPixmap(QPixmap::fromImage(processedDVS.scaledToWidth(dvsView->width())));
-    }
-
-    // 如果检测功能启用，将DVS图像传递给检测模块
-    if (detectionEnabled && dvsDetector) {
-      try {
-        // 确保图像格式为RGB888
-        QImage rgbImg = dvs.convertToFormat(QImage::Format_RGB888);
-
-        if (!rgbImg.isNull() && rgbImg.width() > 0 && rgbImg.height() > 0) {
-          // 创建cv::Mat
-          cv::Mat detectImg(rgbImg.height(), rgbImg.width(), CV_8UC3);
-
-          if (!detectImg.empty() && detectImg.data) {
-            // 手动复制数据，RGB -> BGR
-            for (int y = 0; y < rgbImg.height(); ++y) {
-              const uchar* srcLine = rgbImg.constScanLine(y);
-              uchar* dstLine = detectImg.ptr<uchar>(y);
-              if (srcLine && dstLine) {
-                for (int x = 0; x < rgbImg.width(); ++x) {
-                  dstLine[x * 3 + 0] = srcLine[x * 3 + 2]; // B
-                  dstLine[x * 3 + 1] = srcLine[x * 3 + 1]; // G
-                  dstLine[x * 3 + 2] = srcLine[x * 3 + 0]; // R
-                }
-              }
-            }
-
-            // 使用shared_ptr管理内存
-            std::shared_ptr<cv::Mat> imgPtr = std::make_shared<cv::Mat>(detectImg.clone());
-            dvsDetector->enqueue(imgPtr);
-          }
-        }
-      } catch (const std::exception& e) {
-        qDebug() << "DVS检测图像处理异常:" << e.what();
+      // 如果检测功能启用，将DVS图像传递给统一的检测处理方法
+      if (detectionEnabled) {
+        // 使用统一的检测处理架构
+        QMetaObject::invokeMethod(this, "processDVSImageForDetection",
+                                 Qt::QueuedConnection, Q_ARG(QImage, dvs));
       }
+    } catch (const std::exception& e) {
+      qDebug() << "DVS回放图像处理异常:" << e.what();
     }
   }
+
+  // 恢复原始显示模式
+  currentDisplayMode = originalMode;
 }
 
 void MainWindow::initializeDetection() {
@@ -1419,107 +1510,194 @@ void MainWindow::onModelLoadResult(bool success, QString message) {
 }
 
 void MainWindow::onDetectionToggled(bool enabled) {
-  detectionEnabled = enabled;
-  enableDetect = enabled; // 更新全局变量
-  
+  qDebug() << "检测状态切换请求:" << (enabled ? "启用" : "禁用");
+
+  // 统一的状态验证
   if (enabled) {
-    qDebug() << "检测功能已启用";
-    
-    // 检查模型是否已加载
-    bool dvModelReady = dvDetector && dvDetector->isModelLoaded();
-    bool dvsModelReady = dvsDetector && dvsDetector->isModelLoaded();
-    
-    if (!dvModelReady || !dvsModelReady) {
-      qDebug() << "警告: 模型未完全加载 DV:" << dvModelReady << " DVS:" << dvsModelReady;
-      QMessageBox::warning(this, "检测启动失败", "模型未完全加载，请检查模型文件");
+    // 检查检测模块是否已初始化
+    if (!dvDetector || !dvsDetector || !resultManager) {
+      qDebug() << "错误: 检测模块未初始化";
+      QMessageBox::warning(this, "检测启动失败", "检测模块未初始化，请重启应用程序");
+      enableDetectionCheckBox->setChecked(false);
       return;
     }
-    
-    // 启用检测时，启动推理线程
+
+    // 检查模型是否已加载
+    bool dvModelReady = dvDetector->isModelLoaded();
+    bool dvsModelReady = dvsDetector->isModelLoaded();
+
+    if (!dvModelReady || !dvsModelReady) {
+      qDebug() << "警告: 模型未完全加载 DV:" << dvModelReady << " DVS:" << dvsModelReady;
+      QMessageBox::warning(this, "检测启动失败",
+                          QString("模型未完全加载\nDV模型: %1\nDVS模型: %2\n请检查模型文件")
+                          .arg(dvModelReady ? "已加载" : "未加载")
+                          .arg(dvsModelReady ? "已加载" : "未加载"));
+      enableDetectionCheckBox->setChecked(false);
+      return;
+    }
+  }
+
+  // 更新状态变量
+  detectionEnabled = enabled;
+  enableDetect = enabled; // 更新全局变量
+
+  // 统一的推理线程管理
+  if (enabled) {
+    qDebug() << "启用检测功能，启动推理线程";
+
+    bool dvStarted = false;
+    bool dvsStarted = false;
+
+    // 启动DV推理线程
     if (dvDetector && !dvDetector->isInferenceRunning()) {
       try {
         dvDetector->startInference();
+        dvStarted = true;
         qDebug() << "DV检测推理线程已启动";
       } catch (const std::exception& e) {
         qDebug() << "DV检测推理线程启动失败:" << e.what();
+        QMessageBox::warning(this, "检测启动失败", QString("DV推理线程启动失败: %1").arg(e.what()));
       }
+    } else if (dvDetector && dvDetector->isInferenceRunning()) {
+      dvStarted = true; // 已经在运行
     }
+
+    // 启动DVS推理线程
     if (dvsDetector && !dvsDetector->isInferenceRunning()) {
       try {
         dvsDetector->startInference();
+        dvsStarted = true;
         qDebug() << "DVS检测推理线程已启动";
       } catch (const std::exception& e) {
         qDebug() << "DVS检测推理线程启动失败:" << e.what();
+        QMessageBox::warning(this, "检测启动失败", QString("DVS推理线程启动失败: %1").arg(e.what()));
       }
+    } else if (dvsDetector && dvsDetector->isInferenceRunning()) {
+      dvsStarted = true; // 已经在运行
     }
-    
-    dvDetectionResultLabel->setText(tr("DV检测结果: 已启用"));
-    dvsDetectionResultLabel->setText(tr("DVS检测结果: 已启用"));
-    finalDecisionLabel->setText(tr("最终判决: 已启用"));
+
+    // 如果任一推理线程启动失败，回滚状态
+    if (!dvStarted || !dvsStarted) {
+      qDebug() << "推理线程启动不完整，回滚状态";
+
+      // 停止已启动的线程
+      if (dvStarted && dvDetector && dvDetector->isInferenceRunning()) {
+        try {
+          dvDetector->stopInference();
+        } catch (const std::exception& e) {
+          qDebug() << "回滚时停止DV推理线程失败:" << e.what();
+        }
+      }
+      if (dvsStarted && dvsDetector && dvsDetector->isInferenceRunning()) {
+        try {
+          dvsDetector->stopInference();
+        } catch (const std::exception& e) {
+          qDebug() << "回滚时停止DVS推理线程失败:" << e.what();
+        }
+      }
+
+      // 恢复状态
+      detectionEnabled = false;
+      enableDetect = false;
+      enableDetectionCheckBox->setChecked(false);
+      updateDetectionStatusLabels(false);
+
+      QMessageBox::warning(this, "检测启动失败", "推理线程启动不完整，检测功能已禁用");
+      return;
+    }
   } else {
-    qDebug() << "检测功能已禁用";
-    
-    // 禁用检测时，停止推理线程
+    qDebug() << "禁用检测功能，停止推理线程";
+
+    bool dvStopped = true;
+    bool dvsStopped = true;
+
+    // 停止DV推理线程
     if (dvDetector && dvDetector->isInferenceRunning()) {
       try {
         dvDetector->stopInference();
         qDebug() << "DV检测推理线程已停止";
       } catch (const std::exception& e) {
         qDebug() << "DV检测推理线程停止失败:" << e.what();
+        dvStopped = false;
       }
     }
+
+    // 停止DVS推理线程
     if (dvsDetector && dvsDetector->isInferenceRunning()) {
       try {
         dvsDetector->stopInference();
         qDebug() << "DVS检测推理线程已停止";
       } catch (const std::exception& e) {
         qDebug() << "DVS检测推理线程停止失败:" << e.what();
+        dvsStopped = false;
       }
     }
-    
+
+    // 如果停止失败，记录警告但不阻止状态切换
+    if (!dvStopped || !dvsStopped) {
+      qDebug() << "警告: 部分推理线程停止失败，但继续状态切换";
+      QString warningMsg = "推理线程停止时出现问题:\n";
+      if (!dvStopped) warningMsg += "- DV推理线程停止失败\n";
+      if (!dvsStopped) warningMsg += "- DVS推理线程停止失败\n";
+      warningMsg += "检测功能已禁用，但可能需要重启应用程序";
+
+      QMessageBox::warning(this, "推理线程停止警告", warningMsg);
+    }
+  }
+
+  // 统一的UI标签更新
+  updateDetectionStatusLabels(enabled);
+
+  qDebug() << "检测状态切换完成:" << (enabled ? "已启用" : "已禁用");
+}
+
+// 统一的检测状态标签更新方法
+void MainWindow::updateDetectionStatusLabels(bool enabled) {
+  if (enabled) {
+    // 检测功能启用时，重置所有标签为等待状态
+    dvDetectionResultLabel->setText(tr("DV检测结果: 等待中"));
+    dvsDetectionResultLabel->setText(tr("DVS检测结果: 等待中"));
+    finalDecisionLabel->setText(tr("最终判决: 等待中"));
+
+    // 更新显示模式
+    currentDisplayMode = DisplayMode::DETECTION_VIEW;
+  } else {
+    // 检测功能禁用时，显示禁用状态
     dvDetectionResultLabel->setText(tr("DV检测结果: 已禁用"));
     dvsDetectionResultLabel->setText(tr("DVS检测结果: 已禁用"));
     finalDecisionLabel->setText(tr("最终判决: 已禁用"));
+
+    // 更新显示模式
+    currentDisplayMode = DisplayMode::CAMERA_VIEW;
   }
 }
 
 void MainWindow::updateDVDetectionView(QImage img) {
-  if (detectionEnabled && videoView) {
-    // 显示带检测框的DV图像（检测结果画面）
-    auto configInstance = CameraConfig::getInstance();
-    QImage processedImg = img.mirrored(
-        configInstance.getDVViewHorizontalFlip(),
-        configInstance.getDVViewVerticalFlip());
-    videoView->setPixmap(QPixmap::fromImage(processedImg.scaledToWidth(videoView->width())));
-    
-    // 保存检测结果图片
-    saveDetectionResultImage(img, "DV");
-  }
+  // 使用统一的检测结果显示管理器
+  updateDetectionDisplay(img, "DV");
 }
 
 void MainWindow::updateDVSDetectionView(QImage img) {
-  if (detectionEnabled && dvsView) {
-    // 显示带检测框的DVS图像（检测结果画面）
-    auto configInstance = CameraConfig::getInstance();
-    QImage processedImg = img.mirrored(
-        configInstance.getDVSViewHorizontalFlip(),
-        configInstance.getDVSViewVerticalFlip());
-    dvsView->setPixmap(QPixmap::fromImage(processedImg.scaledToWidth(dvsView->width())));
-    
-    // 保存检测结果图片
-    saveDetectionResultImage(img, "DVS");
-  }
+  // 使用统一的检测结果显示管理器
+  updateDetectionDisplay(img, "DVS");
 }
 
 void MainWindow::onDVDetectionResult(QString result) {
+  // 确保在主线程中执行UI更新
+  if (QThread::currentThread() != this->thread()) {
+    QMetaObject::invokeMethod(this, "onDVDetectionResult",
+                             Qt::QueuedConnection, Q_ARG(QString, result));
+    return;
+  }
+
   if (detectionEnabled) {
     dvDetectionResultLabel->setText(tr("DV检测结果: ") + result);
-    
+
     // 解析检测结果并添加到结果管理器
     bool hasDetection = !result.contains("无");
     QString className = "";
     float confidence = 0.0f;
-    
+
     if (hasDetection) {
       // 简单的结果解析，可根据实际格式调整
       QStringList parts = result.split(" ");
@@ -1527,7 +1705,7 @@ void MainWindow::onDVDetectionResult(QString result) {
         className = parts[1];
         confidence = 0.8f; // 默认置信度，可从结果中解析
       }
-      
+
       // 如果配置了检测时自动录制，且当前没有在录制
       if (recordingWithDetection && hasDetection && !isMaxRecording && !isMidRecording && !isMinRecording) {
         qDebug() << "DV检测到目标，自动启动录制";
@@ -1535,20 +1713,27 @@ void MainWindow::onDVDetectionResult(QString result) {
         emit this->startRecord(path);
       }
     }
-    
+
     resultManager->addDVResult(result, hasDetection, className, confidence);
   }
 }
 
 void MainWindow::onDVSDetectionResult(QString result) {
+  // 确保在主线程中执行UI更新
+  if (QThread::currentThread() != this->thread()) {
+    QMetaObject::invokeMethod(this, "onDVSDetectionResult",
+                             Qt::QueuedConnection, Q_ARG(QString, result));
+    return;
+  }
+
   if (detectionEnabled) {
     dvsDetectionResultLabel->setText(tr("DVS检测结果: ") + result);
-    
+
     // 解析检测结果并添加到结果管理器
     bool hasDetection = !result.contains("无");
     QString className = "";
     float confidence = 0.0f;
-    
+
     if (hasDetection) {
       // 简单的结果解析，可根据实际格式调整
       QStringList parts = result.split(" ");
@@ -1556,7 +1741,7 @@ void MainWindow::onDVSDetectionResult(QString result) {
         className = parts[1];
         confidence = 0.8f; // 默认置信度，可从结果中解析
       }
-      
+
       // 如果配置了检测时自动录制，且当前没有在录制
       if (recordingWithDetection && hasDetection && !isMaxRecording && !isMidRecording && !isMinRecording) {
         qDebug() << "DVS检测到目标，自动启动录制";
@@ -1564,12 +1749,21 @@ void MainWindow::onDVSDetectionResult(QString result) {
         emit this->startRecord(path);
       }
     }
-    
+
     resultManager->addDVSResult(result, hasDetection, className, confidence);
   }
 }
 
 void MainWindow::onFinalDecision(QString decision, QDateTime timestamp) {
+  // 确保在主线程中执行UI更新
+  if (QThread::currentThread() != this->thread()) {
+    QMetaObject::invokeMethod(this, "onFinalDecision",
+                             Qt::QueuedConnection,
+                             Q_ARG(QString, decision),
+                             Q_ARG(QDateTime, timestamp));
+    return;
+  }
+
   if (detectionEnabled) {
     finalDecisionLabel->setText(tr("最终判决: ") + decision);
     qDebug() << "最终判决:" << decision << "时间:" << timestamp.toString();
