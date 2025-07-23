@@ -1,0 +1,8 @@
+/home/pe/yxl/TwoCamera_v6detect（有检测备份））/build/CMakeFiles/TwoCamera.dir
+/home/pe/yxl/TwoCamera_v6detect（有检测备份））/build/CMakeFiles/edit_cache.dir
+/home/pe/yxl/TwoCamera_v6detect（有检测备份））/build/CMakeFiles/rebuild_cache.dir
+/home/pe/yxl/TwoCamera_v6detect（有检测备份））/build/CMakeFiles/TwoCamera_autogen.dir
+/home/pe/yxl/TwoCamera_v6detect（有检测备份））/build/infer/CMakeFiles/infer.dir
+/home/pe/yxl/TwoCamera_v6detect（有检测备份））/build/infer/CMakeFiles/edit_cache.dir
+/home/pe/yxl/TwoCamera_v6detect（有检测备份））/build/infer/CMakeFiles/rebuild_cache.dir
+/home/pe/yxl/TwoCamera_v6detect（有检测备份））/build/infer/CMakeFiles/infer_autogen.dir

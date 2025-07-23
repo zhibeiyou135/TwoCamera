@@ -1,0 +1,2 @@
+/usr/bin/ar qc libinfer.a CMakeFiles/infer.dir/infer_autogen/mocs_compilation.cpp.o CMakeFiles/infer.dir/logger.cpp.o CMakeFiles/infer.dir/detect/DetectModule.cpp.o CMakeFiles/infer.dir/detect/DetectModule_DV.cpp.o CMakeFiles/infer.dir/detect/DetectModule_DVS.cpp.o CMakeFiles/infer.dir/detect/DualCameraResultManager.cpp.o CMakeFiles/infer.dir/detect/TorchEngine.cpp.o CMakeFiles/infer.dir/detect/TorchEngine_DV.cpp.o CMakeFiles/infer.dir/detect/TorchEngine_DVS.cpp.o
+/usr/bin/ranlib libinfer.a
