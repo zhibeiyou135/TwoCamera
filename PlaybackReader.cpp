@@ -391,6 +391,7 @@ void PlaybackReader::playDVwithoutDVS(QList<QFileInfo> dvImgs) {
   
   if (dvImgs.empty()) {
     qDebug() << "DV回放结束: 这是最后一张图片";
+    handlePlaybackFinished();
     emit complete();
     return;
   }
@@ -409,10 +410,12 @@ void PlaybackReader::playDVwithoutDVS(QList<QFileInfo> dvImgs) {
   qDebug() << "DV回放: 下一帧延迟 " << delay << "ms, 下一帧: " 
            << nextImgInfo.fileName() << " 时间戳: " << nextTimestamp;
   
-  // 设置定时器显示下一帧
-  QTimer::singleShot(delay, this, [this, dvImgs]() {
-    playDVwithoutDVS(dvImgs);
-  });
+  // 使用QMetaObject::invokeMethod在主线程中调度下一帧
+  QMetaObject::invokeMethod(this, [this, dvImgs, delay]() {
+    QTimer::singleShot(delay, this, [this, dvImgs]() {
+      playDVwithoutDVS(dvImgs);
+    });
+  }, Qt::QueuedConnection);
 }
 
 
@@ -656,6 +659,7 @@ void PlaybackReader::playRawFileDirectly(const QString &rawFilePath) {
     // 处理完成
     qDebug() << "RAW文件回放完成, 共处理" << frame_count << "帧, " << total_events << "个事件";
     emit visualizationProgress(100, 100);
+    handlePlaybackFinished();
     emit complete();
     
   } catch (const std::exception& e) {
@@ -667,6 +671,7 @@ void PlaybackReader::playRawFileDirectly(const QString &rawFilePath) {
     FILE *rawFile = fopen(rawFilePath.toStdString().c_str(), "rb");
     if (!rawFile) {
       qDebug() << "无法打开RAW文件: " << rawFilePath;
+      handlePlaybackFinished();
       emit complete();
       return;
     }
@@ -773,6 +778,7 @@ void PlaybackReader::playRawFileDirectly(const QString &rawFilePath) {
     fclose(rawFile);
     
     qDebug() << "RAW文件手动解析完成, 共处理" << frameCount << "个数据块";
+    handlePlaybackFinished();
     emit complete();
   }
 }
@@ -1310,7 +1316,9 @@ void PlaybackReader::playNextSession() {
     qDebug() << "No valid DVS file found in:" << session.dvsPath;
     // 跳到下一个会话
     m_currentSessionIndex++;
-    QTimer::singleShot(100, this, &PlaybackReader::playNextSession);
+    QMetaObject::invokeMethod(this, [this]() {
+      QTimer::singleShot(100, this, &PlaybackReader::playNextSession);
+    }, Qt::QueuedConnection);
     return;
   }
 
@@ -1320,7 +1328,9 @@ void PlaybackReader::playNextSession() {
     qDebug() << "No DV images found in:" << session.dvPath;
     // 跳到下一个会话
     m_currentSessionIndex++;
-    QTimer::singleShot(100, this, &PlaybackReader::playNextSession);
+    QMetaObject::invokeMethod(this, [this]() {
+      QTimer::singleShot(100, this, &PlaybackReader::playNextSession);
+    }, Qt::QueuedConnection);
     return;
   }
 
@@ -1342,8 +1352,8 @@ void PlaybackReader::playNextSession() {
   running.store(true);
   m_playbackThread = std::thread(&PlaybackReader::playRAWWithDVImages, this, dvsFile, dvImages);
 
-  // 准备下一个会话索引
-  m_currentSessionIndex++;
+  // 不在这里增加索引，而是在播放完成后增加
+  // m_currentSessionIndex++; // 移除这行
 }
 
 QString PlaybackReader::findDVSFile(const QString &dvsPath) {
@@ -1384,11 +1394,17 @@ void PlaybackReader::handlePlaybackFinished() {
   if (m_batchPlaybackRunning.load()) {
     qDebug() << "Current session completed, preparing next session";
 
+    // 增加会话索引，指向下一个会话
+    m_currentSessionIndex++;
+    qDebug() << "单个会话播放完成，当前索引:" << m_currentSessionIndex << "总会话数:" << m_sessionQueue.size();
+
     // 检查是否还有更多会话
     if (m_currentSessionIndex < m_sessionQueue.size()) {
       qDebug() << "Scheduling next session in 1000ms to ensure cleanup";
-      // 给足够的时间让当前会话完全清理
-      QTimer::singleShot(1000, this, &PlaybackReader::playNextSession);
+      // 给足够的时间让当前会话完全清理，使用QMetaObject::invokeMethod确保在主线程中执行
+      QMetaObject::invokeMethod(this, [this]() {
+        QTimer::singleShot(1000, this, &PlaybackReader::playNextSession);
+      }, Qt::QueuedConnection);
     } else {
       qDebug() << "All sessions completed";
       m_batchPlaybackRunning.store(false);
