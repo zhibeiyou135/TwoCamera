@@ -22,17 +22,20 @@ struct FileSaveTask {
         SAVE_DV_ORIGINAL,
         SAVE_DV_CROPPED,
         SAVE_DVS_IMAGE,
-        SAVE_DETECTION_RESULT
+        SAVE_DETECTION_RESULT,
+        SAVE_DV_DETECTION_IMAGE,    // DV检测结果图像
+        SAVE_DVS_DETECTION_IMAGE    // DVS检测结果图像
     };
-    
+
     TaskType type;
     cv::Mat image;           // OpenCV图像数据
     QImage qimage;          // Qt图像数据
     QString filePath;       // 保存路径
     QString content;        // 文本内容（用于检测结果）
     uint64_t timestamp;     // 时间戳
-    
-    FileSaveTask() : type(SAVE_DV_ORIGINAL), timestamp(0) {}
+    int priority;           // 任务优先级 (0=最高, 9=最低)
+
+    FileSaveTask() : type(SAVE_DV_ORIGINAL), timestamp(0), priority(5) {}
 };
 
 // 文件保存工作线程
@@ -83,14 +86,25 @@ public:
     void saveDVCropped(const cv::Mat &image, const QString &filePath, uint64_t timestamp = 0);
     void saveDVSImage(const cv::Mat &image, const QString &filePath, uint64_t timestamp = 0);
     void saveDetectionResult(const QString &content, const QString &filePath, uint64_t timestamp = 0);
+
+    // 检测结果图像保存方法 - 优化版本
+    void saveDVDetectionImage(const QImage &image, const QString &filePath, uint64_t timestamp = 0, int priority = 3);
+    void saveDVSDetectionImage(const QImage &image, const QString &filePath, uint64_t timestamp = 0, int priority = 3);
+
+    // 智能限流的检测结果保存
+    void saveDetectionImageWithThrottling(const QImage &image, const QString &cameraType, uint64_t timestamp = 0);
     
     // 获取队列状态
     int getQueueSize() const;
     int getCompletedTasks() const;
     int getTotalTasks() const;
-    
+
     // 清空队列
     void clearQueue();
+
+    // 性能监控
+    double getAverageSaveTime() const;
+    int getFailedTaskCount() const;
     
 signals:
     void saveCompleted(const QString &filePath, bool success);
@@ -116,4 +130,9 @@ private:
     std::atomic<int> currentQueueSize;
     std::atomic<int> completedTaskCount;
     std::atomic<int> totalTaskCount;
+
+    // 限流控制
+    std::atomic<uint64_t> lastDVDetectionSave;
+    std::atomic<uint64_t> lastDVSDetectionSave;
+    static constexpr uint64_t DETECTION_SAVE_INTERVAL_MS = 2000; // 2秒间隔
 };

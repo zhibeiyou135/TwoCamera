@@ -133,11 +133,13 @@ protected:
                             result->copyTo(display_img);
                         }
                         
-                        QImage qimg(display_img.data, display_img.cols, display_img.rows, 
+                        QImage qimg(display_img.data, display_img.cols, display_img.rows,
                                    display_img.step, QImage::Format_RGB888);
-                        
+
                         if (!qimg.isNull()) {
-                            emit parent->newDetectResultImg(qimg.copy());
+                            // 使用移动语义减少拷贝开销
+                            QImage resultImg = qimg.copy();
+                            emit parent->newDetectResultImg(std::move(resultImg));
                         }
                         
                     } catch (const std::exception& e) {

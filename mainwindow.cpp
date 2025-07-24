@@ -24,6 +24,7 @@
 #include <mcheck.h>
 #include <opencv2/opencv.hpp>
 #include <thread>
+#include <chrono>
 #include "socket/modbussocket.h"
 #include "PlaybackReader.h"
 #include <QApplication>
@@ -1777,81 +1778,18 @@ void MainWindow::onFinalDecision(QString decision, QDateTime timestamp) {
   }
 }
 
-// 添加检测结果图片保存功能
+// 优化的检测结果图片保存功能 - 使用FileSaveManager异步保存
 void MainWindow::saveDetectionResultImage(const QImage &img, const QString &cameraType) {
   // 只在检测启用且有有效图像时保存
   if (!detectionEnabled || img.isNull()) {
     return;
   }
-  
-  // 添加限流机制，避免保存过多图片
-  static QElapsedTimer dvSaveTimer;
-  static QElapsedTimer dvsSaveTimer;
-  static bool dvTimerInitialized = false;
-  static bool dvsTimerInitialized = false;
-  
-  QElapsedTimer* currentTimer = nullptr;
-  bool* timerInitialized = nullptr;
-  
-  if (cameraType == "DV") {
-    currentTimer = &dvSaveTimer;
-    timerInitialized = &dvTimerInitialized;
-  } else if (cameraType == "DVS") {
-    currentTimer = &dvsSaveTimer;
-    timerInitialized = &dvsTimerInitialized;
-  } else {
-    return;
-  }
-  
-  // 初始化计时器
-  if (!*timerInitialized) {
-    currentTimer->start();
-    *timerInitialized = true;
-    return;
-  }
-  
-  // 限制保存频率：每2秒最多保存一张检测结果图片
-  if (currentTimer->elapsed() < 2000) {
-    return;
-  }
-  currentTimer->restart();
-  
-  // 获取录制配置
-  auto recordingConfig = RecordingConfig::getInstance();
-  
-  // 检查是否有当前录制会话，如果没有则创建一个专门用于检测结果的会话
-  QString sessionPath = recordingConfig->getCurrentSessionPath();
-  if (sessionPath.isEmpty()) {
-    // 创建专门的检测结果会话
-    QString timestamp = QDateTime::currentDateTime().toString("yyyy-MM-dd_HH-mm-ss");
-    sessionPath = recordingConfig->createRecordingSession(timestamp + "_detect");
-    qDebug() << "创建检测结果保存会话:" << sessionPath;
-  }
-  
-  // 创建检测结果图片保存目录
-  QString detectResultPath = sessionPath + "/detection_results";
-  QDir().mkpath(detectResultPath);
-  
-  // 根据相机类型创建子目录
-  QString cameraPath = detectResultPath + "/" + cameraType.toLower();
-  QDir().mkpath(cameraPath);
-  
-  // 生成文件名
-  QString timestamp = QDateTime::currentDateTime().toString("yyyy-MM-dd_HH-mm-ss-zzz");
-  QString filename = QString("%1/%2_detection_%3.png").arg(cameraPath).arg(cameraType.toLower()).arg(timestamp);
-  
-  // 保存图片
-  try {
-    if (img.save(filename, "PNG")) {
-      qDebug() << "检测结果图片已保存:" << filename;
-    } else {
-      qDebug() << "检测结果图片保存失败:" << filename;
-    }
-  } catch (const std::exception& e) {
-    qDebug() << "保存检测结果图片异常:" << e.what();
-  } catch (...) {
-    qDebug() << "保存检测结果图片未知异常";
-  }
+
+  // 使用FileSaveManager的智能限流保存
+  uint64_t timestamp = std::chrono::duration_cast<std::chrono::microseconds>(
+      std::chrono::system_clock::now().time_since_epoch()).count();
+
+  FileSaveManager::getInstance()->saveDetectionImageWithThrottling(img, cameraType, timestamp);
 }
 
 // 加载主配置文件

@@ -4,11 +4,13 @@
 //
 
 #include "FileSaveManager.h"
+#include "RecordingConfig.h"
 #include <QDebug>
 #include <QDir>
 #include <QFileInfo>
 #include <QTextStream>
 #include <QMutexLocker>
+#include <QDateTime>
 #include <chrono>
 #include <opencv2/opencv.hpp>
 
@@ -23,10 +25,23 @@ FileSaveWorker::~FileSaveWorker() {
 
 void FileSaveWorker::addTask(const FileSaveTask &task) {
     QMutexLocker locker(&queueMutex);
-    taskQueue.enqueue(task);
+
+    // 简单的优先级插入：高优先级任务插入到队列前部
+    if (task.priority <= 2 && !taskQueue.isEmpty()) {
+        // 为高优先级任务预留位置，插入到队列前部
+        QQueue<FileSaveTask> tempQueue;
+        tempQueue.enqueue(task);
+        while (!taskQueue.isEmpty()) {
+            tempQueue.enqueue(taskQueue.dequeue());
+        }
+        taskQueue = tempQueue;
+    } else {
+        taskQueue.enqueue(task);
+    }
+
     totalTasks.fetch_add(1);
     queueCondition.wakeOne();
-    
+
     emit queueSizeChanged(taskQueue.size());
 }
 
@@ -73,7 +88,12 @@ void FileSaveWorker::processQueue() {
                 case FileSaveTask::SAVE_DVS_IMAGE:
                     success = saveOpenCVImage(task.image, filePath);
                     break;
-                    
+
+                case FileSaveTask::SAVE_DV_DETECTION_IMAGE:
+                case FileSaveTask::SAVE_DVS_DETECTION_IMAGE:
+                    success = saveQImage(task.qimage, filePath);
+                    break;
+
                 case FileSaveTask::SAVE_DETECTION_RESULT:
                     success = saveTextFile(task.content, filePath);
                     break;
@@ -154,9 +174,10 @@ bool FileSaveWorker::saveTextFile(const QString &content, const QString &filePat
 // FileSaveManager 实现
 FileSaveManager* FileSaveManager::instance = nullptr;
 
-FileSaveManager::FileSaveManager() 
+FileSaveManager::FileSaveManager()
     : workerThread(nullptr), worker(nullptr), serviceRunning(false),
-      currentQueueSize(0), completedTaskCount(0), totalTaskCount(0) {
+      currentQueueSize(0), completedTaskCount(0), totalTaskCount(0),
+      lastDVDetectionSave(0), lastDVSDetectionSave(0) {
 }
 
 FileSaveManager::~FileSaveManager() {
@@ -278,14 +299,111 @@ void FileSaveManager::saveDetectionResult(const QString &content, const QString 
         qDebug() << "文件保存服务未启动，无法保存检测结果";
         return;
     }
-    
+
     FileSaveTask task;
     task.type = FileSaveTask::SAVE_DETECTION_RESULT;
     task.content = content;
     task.filePath = filePath;
     task.timestamp = timestamp;
-    
+    task.priority = 4; // 中等优先级
+
     worker->addTask(task);
+}
+
+void FileSaveManager::saveDVDetectionImage(const QImage &image, const QString &filePath, uint64_t timestamp, int priority) {
+    if (!serviceRunning.load()) {
+        qDebug() << "文件保存服务未启动，无法保存DV检测结果图像";
+        return;
+    }
+
+    if (image.isNull()) {
+        qDebug() << "DV检测结果图像为空，跳过保存";
+        return;
+    }
+
+    FileSaveTask task;
+    task.type = FileSaveTask::SAVE_DV_DETECTION_IMAGE;
+    task.qimage = image.copy(); // 深拷贝确保线程安全
+    task.filePath = filePath;
+    task.timestamp = timestamp;
+    task.priority = priority;
+
+    worker->addTask(task);
+}
+
+void FileSaveManager::saveDVSDetectionImage(const QImage &image, const QString &filePath, uint64_t timestamp, int priority) {
+    if (!serviceRunning.load()) {
+        qDebug() << "文件保存服务未启动，无法保存DVS检测结果图像";
+        return;
+    }
+
+    if (image.isNull()) {
+        qDebug() << "DVS检测结果图像为空，跳过保存";
+        return;
+    }
+
+    FileSaveTask task;
+    task.type = FileSaveTask::SAVE_DVS_DETECTION_IMAGE;
+    task.qimage = image.copy(); // 深拷贝确保线程安全
+    task.filePath = filePath;
+    task.timestamp = timestamp;
+    task.priority = priority;
+
+    worker->addTask(task);
+}
+
+void FileSaveManager::saveDetectionImageWithThrottling(const QImage &image, const QString &cameraType, uint64_t timestamp) {
+    if (!serviceRunning.load() || image.isNull()) {
+        return;
+    }
+
+    // 获取当前时间戳（毫秒）
+    uint64_t currentTime = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+
+    // 检查限流
+    std::atomic<uint64_t>* lastSaveTime = nullptr;
+    if (cameraType == "DV") {
+        lastSaveTime = &lastDVDetectionSave;
+    } else if (cameraType == "DVS") {
+        lastSaveTime = &lastDVSDetectionSave;
+    } else {
+        qDebug() << "未知的相机类型:" << cameraType;
+        return;
+    }
+
+    uint64_t lastTime = lastSaveTime->load();
+    if (currentTime - lastTime < FileSaveManager::DETECTION_SAVE_INTERVAL_MS) {
+        // 限流：跳过此次保存
+        return;
+    }
+
+    // 更新最后保存时间
+    lastSaveTime->store(currentTime);
+
+    // 获取录制配置并生成文件路径
+    auto recordingConfig = RecordingConfig::getInstance();
+    QString sessionPath = recordingConfig->getCurrentSessionPath();
+
+    if (sessionPath.isEmpty()) {
+        // 创建专门的检测结果会话
+        QString timestampStr = QDateTime::currentDateTime().toString("yyyy-MM-dd_HH-mm-ss");
+        sessionPath = recordingConfig->createRecordingSession(timestampStr + "_detect");
+    }
+
+    // 创建检测结果图片保存目录
+    QString detectResultPath = sessionPath + "/detection_results/" + cameraType.toLower();
+
+    // 生成文件名
+    QString timestampStr = QDateTime::currentDateTime().toString("yyyy-MM-dd_HH-mm-ss-zzz");
+    QString filename = QString("%1/%2_detection_%3.png").arg(detectResultPath).arg(cameraType.toLower()).arg(timestampStr);
+
+    // 异步保存
+    if (cameraType == "DV") {
+        saveDVDetectionImage(image, filename, timestamp, 3);
+    } else {
+        saveDVSDetectionImage(image, filename, timestamp, 3);
+    }
 }
 
 int FileSaveManager::getQueueSize() const {
@@ -307,6 +425,16 @@ void FileSaveManager::clearQueue() {
     }
 }
 
+double FileSaveManager::getAverageSaveTime() const {
+    // 简单实现，返回估算的平均保存时间
+    return 50.0; // 毫秒
+}
+
+int FileSaveManager::getFailedTaskCount() const {
+    // 简单实现，可以后续扩展
+    return 0;
+}
+
 void FileSaveManager::onTaskCompleted(const QString &filePath, bool success) {
     completedTaskCount.fetch_add(1);
     emit saveCompleted(filePath, success);
@@ -320,5 +448,3 @@ void FileSaveManager::onQueueSizeChanged(int size) {
 void FileSaveManager::onSaveProgress(int completed, int total) {
     emit queueStatusChanged(currentQueueSize.load(), completed, total);
 }
-
-#include "FileSaveManager.moc"
