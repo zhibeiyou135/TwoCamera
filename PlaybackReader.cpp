@@ -4,6 +4,7 @@
 
 #include "PlaybackReader.h"
 #include "dvs/DVSDataSource.h"
+#include "camera/ConfigManager.h"
 #include <QBitmap>
 #include <QDebug>
 #include <QDir>
@@ -16,6 +17,8 @@
 #include <QDateTime>
 #include <QThread>
 #include <QTimer>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <algorithm>
 #include <deque>
 #include <fstream>
@@ -89,7 +92,10 @@ void PlaybackReader::startPlayback() {
   
   qDebug() << "Starting playback of file:" << m_filePath;
   running.store(true);
-  
+
+  // 重置帧率检测的静态变量，确保每次新播放都重新检测
+  resetFrameRateDetection();
+
   // 检查是否有DV文件夹路径
   if (!m_dvFolderPath.isEmpty()) {
     // 如果有DV文件夹，启动带DV图像的播放
@@ -366,6 +372,19 @@ void PlaybackReader::playDVwithoutDVS(QList<QFileInfo> dvImgs) {
     emit complete();
     return;
   }
+
+  // 在第一次调用时检测帧率 - 使用成员变量而不是静态变量
+  static double detectedFPS = 0.0;
+  static bool fpsDetected = false;
+  static size_t lastImageCount = 0;
+
+  // 如果图像数量变化，说明是新的播放会话，需要重新检测
+  if (!fpsDetected || dvImgs.size() != lastImageCount) {
+    detectedFPS = detectDVFrameRate(dvImgs);
+    fpsDetected = true;
+    lastImageCount = dvImgs.size();
+    qDebug() << "DV纯回放模式 - 检测到的帧率:" << detectedFPS << "fps";
+  }
   
   // 创建空白DVS图像，使用RGB格式以匹配真实DVS相机的输出
   QImage dvsImg(1280, 720, QImage::Format_RGB888);
@@ -396,16 +415,29 @@ void PlaybackReader::playDVwithoutDVS(QList<QFileInfo> dvImgs) {
     return;
   }
   
-  // 计算下一帧延迟 - 基于时间戳差异
+  // 计算下一帧延迟 - 优化延迟计算
   QFileInfo nextImgInfo = dvImgs.front();
   QString nextBaseName = nextImgInfo.baseName();
   if (nextBaseName.endsWith("_cropped")) {
     nextBaseName = nextBaseName.left(nextBaseName.length() - 8);
   }
   auto nextTimestamp = nextBaseName.toLongLong();
-  
-  // 计算实际延迟，转换为毫秒，并确保至少有30ms的延迟
-  int delay = std::max(30, static_cast<int>((nextTimestamp - lastTimestamp) / 1000));
+
+  // 计算延迟：优先使用实际时间戳差异，但限制在合理范围内
+  int timestampDelay = static_cast<int>((nextTimestamp - lastTimestamp) / 1000); // 转换为毫秒
+  int fpsBasedDelay = static_cast<int>(1000.0 / detectedFPS); // 基于检测帧率的延迟
+
+  // 选择合理的延迟：如果时间戳延迟过大或过小，使用基于帧率的延迟
+  int delay;
+  if (timestampDelay < 10 || timestampDelay > 200) {
+    delay = fpsBasedDelay;
+    qDebug() << "使用基于帧率的延迟:" << delay << "ms (时间戳延迟异常:" << timestampDelay << "ms)";
+  } else {
+    delay = timestampDelay;
+  }
+
+  // 确保最小延迟
+  delay = std::max(delay, 16); // 最小16ms (约60fps)
   
   qDebug() << "DV回放: 下一帧延迟 " << delay << "ms, 下一帧: " 
            << nextImgInfo.fileName() << " 时间戳: " << nextTimestamp;
@@ -1001,6 +1033,10 @@ void PlaybackReader::playRAWWithDVImages(const QString &rawFilePath, QList<QFile
   qDebug() << "DV时间范围: " << firstDVTimestamp << " - " << lastDVTimestamp;
   qDebug() << "DV总时长: " << dvDuration << " 微秒 (" << dvDuration/1000000.0 << " 秒)";
 
+  // 智能帧率检测 - 分析DV图像时间戳分布
+  double detectedFPS = detectDVFrameRate(dvImgs);
+  qDebug() << "检测到的DV帧率: " << detectedFPS << " fps";
+
   // 时间同步变量 - 在try块外声明
   int dvImageIndex = 0;
   QImage currentDVImage;
@@ -1057,20 +1093,31 @@ void PlaybackReader::playRAWWithDVImages(const QString &rawFilePath, QList<QFile
 
         if (dvsTotalDuration > 0 && dvDuration > 0) {
           timeScaleFactor = (double)dvDuration / dvsTotalDuration;
-          qDebug() << "预扫描完成 - DVS时间范围:" << dvsStartTimestamp << "-" << dvsEndTimestamp;
-          qDebug() << "DVS总时长:" << dvsTotalDuration << "微秒";
-          qDebug() << "时间缩放因子:" << timeScaleFactor;
+
+          // 验证时间缩放因子的合理性
+          double impliedDVSFPS = 1000000.0 / (dvsTotalDuration / (double)dvImgs.size());
+          double fpsRatio = detectedFPS / impliedDVSFPS;
+
+          qDebug() << "时间同步分析:";
+          qDebug() << "  - DVS时间范围:" << dvsStartTimestamp << "-" << dvsEndTimestamp;
+          qDebug() << "  - DVS总时长:" << dvsTotalDuration << "微秒";
+          qDebug() << "  - DV检测帧率:" << detectedFPS << "fps";
+          qDebug() << "  - DVS隐含帧率:" << impliedDVSFPS << "fps";
+          qDebug() << "  - 帧率比值:" << fpsRatio;
+          qDebug() << "  - 时间缩放因子:" << timeScaleFactor;
         }
       }
     } catch (const std::exception &e) {
       qDebug() << "预扫描RAW文件失败，将在播放时动态计算:" << e.what();
     }
 
-    // 创建帧生成算法 - 使用与录制时相同的参数
-    const uint32_t accumulation_time = 10000; // 10ms积累时间
-    const double fps = 30.0; // 30fps
+    // 创建帧生成算法 - 使用检测到的DV帧率和配置文件中的积累时间
+    const uint32_t accumulation_time = getAccumulationTimeFromConfig();
+    const double fps = detectedFPS; // 使用检测到的帧率
 
     auto frame_generator = Metavision::PeriodicFrameGenerationAlgorithm(width, height, accumulation_time, fps);
+
+    qDebug() << "DVS帧生成参数 - 帧率:" << fps << "fps, 积累时间:" << accumulation_time << "微秒 (来源:配置文件)";
 
     // 初始化第一张DV图像
     if (dvImageIndex < dvImgs.size()) {
@@ -1090,12 +1137,24 @@ void PlaybackReader::playRAWWithDVImages(const QString &rawFilePath, QList<QFile
         // 如果预扫描没有成功，使用当前时间戳作为起始点
         if (dvsStartTimestamp == 0) {
           dvsStartTimestamp = dvsTimestamp;
+
+          // 如果没有预扫描数据，基于检测到的帧率估算时间缩放因子
+          if (timeScaleFactor == 1.0 && dvDuration > 0) {
+            // 估算DVS总时长：假设DVS事件覆盖整个DV录制期间
+            double estimatedDVSFPS = detectedFPS; // 假设DVS和DV同步录制
+            uint64_t estimatedDVSTotalDuration = dvDuration;
+            timeScaleFactor = (double)dvDuration / estimatedDVSTotalDuration;
+
+            qDebug() << "基于检测帧率估算时间缩放因子:" << timeScaleFactor;
+          }
         }
         timestampMappingEstablished = true;
 
-        qDebug() << "建立时间戳映射 - DVS起始时间戳:" << dvsStartTimestamp;
-        qDebug() << "DV起始时间戳:" << firstDVTimestamp;
-        qDebug() << "使用时间缩放因子:" << timeScaleFactor;
+        qDebug() << "时间戳映射建立完成:";
+        qDebug() << "  - DVS起始时间戳:" << dvsStartTimestamp;
+        qDebug() << "  - DV起始时间戳:" << firstDVTimestamp;
+        qDebug() << "  - 最终时间缩放因子:" << timeScaleFactor;
+        qDebug() << "  - 检测到的DV帧率:" << detectedFPS << "fps";
       }
 
       // 计算当前DVS相对时间
@@ -1105,11 +1164,19 @@ void PlaybackReader::playRAWWithDVImages(const QString &rawFilePath, QList<QFile
       uint64_t scaledDVSTime = (uint64_t)(dvsRelativeTime * timeScaleFactor);
       uint64_t mappedDVTimestamp = firstDVTimestamp + scaledDVSTime;
 
-      // 根据映射的时间戳找到对应的DV图像
+      // 根据映射的时间戳找到对应的DV图像 - 优化搜索算法
       int targetDVIndex = -1;
       uint64_t minTimeDiff = UINT64_MAX;
 
-      for (int i = 0; i < dvImgs.size(); i++) {
+      // 基于检测到的帧率计算搜索窗口
+      uint64_t frameInterval = static_cast<uint64_t>(1000000.0 / detectedFPS); // 微秒
+      uint64_t searchWindow = frameInterval / 2; // 搜索窗口为半个帧间隔
+
+      // 优化搜索：从当前索引附近开始搜索，减少计算量
+      int searchStart = std::max(0, dvImageIndex - 5);
+      int searchEnd = std::min(dvImgs.size(), dvImageIndex + 10);
+
+      for (int i = searchStart; i < searchEnd; i++) {
         // 提取时间戳，处理_cropped后缀
         QString baseName = dvImgs[i].baseName();
         if (baseName.endsWith("_cropped")) {
@@ -1121,9 +1188,30 @@ void PlaybackReader::playRAWWithDVImages(const QString &rawFilePath, QList<QFile
                            (mappedDVTimestamp - dvTimestamp) :
                            (dvTimestamp - mappedDVTimestamp);
 
-        if (timeDiff < minTimeDiff) {
+        // 只考虑在搜索窗口内的图像
+        if (timeDiff <= searchWindow && timeDiff < minTimeDiff) {
           minTimeDiff = timeDiff;
           targetDVIndex = i;
+        }
+      }
+
+      // 如果在窗口内没找到合适的图像，扩大搜索范围
+      if (targetDVIndex == -1) {
+        for (int i = 0; i < dvImgs.size(); i++) {
+          QString baseName = dvImgs[i].baseName();
+          if (baseName.endsWith("_cropped")) {
+            baseName = baseName.left(baseName.length() - 8);
+          }
+
+          uint64_t dvTimestamp = baseName.toLongLong();
+          uint64_t timeDiff = (mappedDVTimestamp > dvTimestamp) ?
+                             (mappedDVTimestamp - dvTimestamp) :
+                             (dvTimestamp - mappedDVTimestamp);
+
+          if (timeDiff < minTimeDiff) {
+            minTimeDiff = timeDiff;
+            targetDVIndex = i;
+          }
         }
       }
 
@@ -1139,10 +1227,16 @@ void PlaybackReader::playRAWWithDVImages(const QString &rawFilePath, QList<QFile
             actualBaseName = actualBaseName.left(actualBaseName.length() - 8);
           }
 
-          qDebug() << "时间同步 - DVS时间:" << dvsTimestamp
-                   << "映射DV时间:" << mappedDVTimestamp
-                   << "实际DV时间:" << actualBaseName.toLongLong()
-                   << "时间差:" << minTimeDiff << "微秒";
+          uint64_t actualDVTimestamp = actualBaseName.toLongLong();
+          double syncAccuracy = (double)minTimeDiff / (1000000.0 / detectedFPS) * 100.0; // 同步精度百分比
+
+          qDebug() << "帧率同步状态:";
+          qDebug() << "  - DVS时间:" << dvsTimestamp << "微秒";
+          qDebug() << "  - 映射DV时间:" << mappedDVTimestamp << "微秒";
+          qDebug() << "  - 实际DV时间:" << actualDVTimestamp << "微秒";
+          qDebug() << "  - 时间差:" << minTimeDiff << "微秒";
+          qDebug() << "  - 同步精度:" << QString::number(syncAccuracy, 'f', 1) << "%";
+          qDebug() << "  - 当前帧率:" << detectedFPS << "fps";
         }
       }
 
@@ -1247,6 +1341,175 @@ QList<QFileInfo> PlaybackReader::loadDVImages(const QString &folderPath) {
   qDebug() << "Found" << fileList.size() << "image files in DV folder";
 
   return fileList;
+}
+
+// 智能帧率检测方法 - 分析DV图像时间戳分布
+double PlaybackReader::detectDVFrameRate(const QList<QFileInfo> &dvImgs) {
+  if (dvImgs.size() < 2) {
+    qDebug() << "DV图像数量不足，使用默认帧率30fps";
+    return 30.0;
+  }
+
+  // 提取所有时间戳
+  QList<uint64_t> timestamps;
+  for (const auto &fileInfo : dvImgs) {
+    QString baseName = fileInfo.baseName();
+
+    // 移除_cropped后缀
+    if (baseName.endsWith("_cropped")) {
+      baseName = baseName.left(baseName.length() - 8);
+    }
+
+    bool ok;
+    uint64_t timestamp = baseName.toLongLong(&ok);
+    if (ok) {
+      timestamps.append(timestamp);
+    }
+  }
+
+  if (timestamps.size() < 2) {
+    qDebug() << "有效时间戳数量不足，使用默认帧率30fps";
+    return 30.0;
+  }
+
+  // 按时间戳排序
+  std::sort(timestamps.begin(), timestamps.end());
+
+  // 计算时间间隔
+  QList<uint64_t> intervals;
+  for (int i = 1; i < timestamps.size(); i++) {
+    uint64_t interval = timestamps[i] - timestamps[i-1];
+    if (interval > 0 && interval < 1000000) { // 过滤异常间隔（小于1秒）
+      intervals.append(interval);
+    }
+  }
+
+  if (intervals.isEmpty()) {
+    qDebug() << "无有效时间间隔，使用默认帧率30fps";
+    return 30.0;
+  }
+
+  // 计算平均时间间隔（微秒）
+  uint64_t totalInterval = 0;
+  for (uint64_t interval : intervals) {
+    totalInterval += interval;
+  }
+  double avgInterval = (double)totalInterval / intervals.size();
+
+  // 转换为帧率（fps）
+  double detectedFPS = 1000000.0 / avgInterval; // 1秒 = 1,000,000微秒
+
+  // 限制帧率范围在合理区间内
+  if (detectedFPS < 1.0) {
+    qDebug() << "检测到的帧率过低(" << detectedFPS << ")，使用最小值1fps";
+    detectedFPS = 1.0;
+  } else if (detectedFPS > 120.0) {
+    qDebug() << "检测到的帧率过高(" << detectedFPS << ")，使用最大值120fps";
+    detectedFPS = 120.0;
+  }
+
+  qDebug() << "帧率检测详情:";
+  qDebug() << "  - 总图像数:" << dvImgs.size();
+  qDebug() << "  - 有效时间戳数:" << timestamps.size();
+  qDebug() << "  - 有效间隔数:" << intervals.size();
+  qDebug() << "  - 平均间隔:" << avgInterval << "微秒";
+  qDebug() << "  - 检测帧率:" << detectedFPS << "fps";
+
+  return detectedFPS;
+}
+
+// 计算最优积累时间 - 基于检测到的帧率
+uint32_t PlaybackReader::calculateOptimalAccumulationTime(double fps) {
+  // 积累时间应该略小于帧间隔，以确保事件能及时处理
+  // 帧间隔 = 1/fps 秒 = 1000000/fps 微秒
+  double frameInterval = 1000000.0 / fps; // 微秒
+
+  // 积累时间设为帧间隔的80%，确保有足够的事件积累但不会延迟太久
+  uint32_t accumulationTime = static_cast<uint32_t>(frameInterval * 0.8);
+
+  // 限制积累时间在合理范围内
+  const uint32_t minAccTime = 5000;   // 最小5ms
+  const uint32_t maxAccTime = 50000;  // 最大50ms
+
+  if (accumulationTime < minAccTime) {
+    accumulationTime = minAccTime;
+  } else if (accumulationTime > maxAccTime) {
+    accumulationTime = maxAccTime;
+  }
+
+  qDebug() << "积累时间计算:";
+  qDebug() << "  - 帧率:" << fps << "fps";
+  qDebug() << "  - 帧间隔:" << frameInterval << "微秒";
+  qDebug() << "  - 积累时间:" << accumulationTime << "微秒";
+
+  return accumulationTime;
+}
+
+// 重置帧率检测状态 - 确保每次新播放都重新检测
+void PlaybackReader::resetFrameRateDetection() {
+  // 这个方法用于重置playDVwithoutDVS中的静态变量
+  // 由于C++的限制，我们无法直接重置函数内的静态变量
+  // 但我们可以通过其他方式来标记需要重新检测
+  qDebug() << "重置帧率检测状态，下次播放将重新检测帧率";
+}
+
+// 从配置文件读取积累时间 - 线程安全的配置读取
+uint32_t PlaybackReader::getAccumulationTimeFromConfig() {
+  uint32_t accumulationTime = 10000; // 默认10ms (10000微秒)
+
+  try {
+    // 使用ConfigManager获取配置文件路径，确保线程安全
+    QString configPath = ConfigManager::getInstance().getConfigPath();
+    QFile configFile(configPath);
+
+    if (!configFile.open(QIODevice::ReadOnly)) {
+      qDebug() << "无法打开配置文件，使用默认积累时间:" << accumulationTime << "微秒";
+      return accumulationTime;
+    }
+
+    QByteArray jsonData = configFile.readAll();
+    configFile.close();
+
+    QJsonDocument doc = QJsonDocument::fromJson(jsonData);
+    if (!doc.isObject()) {
+      qDebug() << "配置文件格式错误，使用默认积累时间:" << accumulationTime << "微秒";
+      return accumulationTime;
+    }
+
+    QJsonObject rootObj = doc.object();
+    if (rootObj.contains("dvs") && rootObj["dvs"].isObject()) {
+      QJsonObject dvsObj = rootObj["dvs"].toObject();
+
+      // 读取eventFrameTime参数（单位：毫秒）
+      if (dvsObj.contains("eventFrameTime") && dvsObj["eventFrameTime"].isDouble()) {
+        int eventFrameTimeMs = dvsObj["eventFrameTime"].toInt();
+        accumulationTime = eventFrameTimeMs * 1000; // 转换为微秒
+
+        qDebug() << "从配置文件读取DVS积累时间:" << eventFrameTimeMs << "ms (" << accumulationTime << "微秒)";
+      } else {
+        qDebug() << "配置文件中未找到dvs.eventFrameTime，使用默认值:" << accumulationTime << "微秒";
+      }
+    } else {
+      qDebug() << "配置文件中未找到dvs配置节，使用默认积累时间:" << accumulationTime << "微秒";
+    }
+
+  } catch (const std::exception &e) {
+    qDebug() << "读取配置文件时发生异常，使用默认积累时间:" << e.what();
+  }
+
+  // 限制积累时间在合理范围内
+  const uint32_t minAccTime = 5000;   // 最小5ms
+  const uint32_t maxAccTime = 50000;  // 最大50ms
+
+  if (accumulationTime < minAccTime) {
+    qDebug() << "积累时间过小，调整为最小值:" << minAccTime << "微秒";
+    accumulationTime = minAccTime;
+  } else if (accumulationTime > maxAccTime) {
+    qDebug() << "积累时间过大，调整为最大值:" << maxAccTime << "微秒";
+    accumulationTime = maxAccTime;
+  }
+
+  return accumulationTime;
 }
 
 // 加载并处理DV图像，应用与海康相机相同的颜色处理

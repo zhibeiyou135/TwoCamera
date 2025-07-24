@@ -6,6 +6,7 @@
 #include "DVSBiasConfig.h"
 #include "camera/RecordingConfig.h"
 #include "camera/ConfigManager.h"
+#include "camera/FileSaveManager.h"
 #include <QColor>
 #include <QImage>
 #include <QQueue>
@@ -43,16 +44,16 @@ DVSDataSource::~DVSDataSource() {
     stopRecord();
   }
   
-  // 停止图像保存线程
-  qDebug() << "Stopping image save threads...";
-    {
-    std::lock_guard<std::mutex> lock(queueMutex);
-    for (auto &thread : saveThread) {
-      if (thread.joinable()) {
-        thread.detach();  // 使用detach避免阻塞
-      }
-    }
-  }
+  // 图像保存线程已废弃，现在使用FileSaveManager
+  // qDebug() << "Stopping image save threads...";
+  //   {
+  //   std::lock_guard<std::mutex> lock(queueMutex);
+  //   for (auto &thread : saveThread) {
+  //     if (thread.joinable()) {
+  //       thread.detach();  // 使用detach避免阻塞
+  //     }
+  //   }
+  // }
   
   qDebug() << "DVSDataSource destroyed";
 }
@@ -203,12 +204,14 @@ void DVSDataSource::initCamera() {
     // 设置帧回调
     frameGenerator->set_output_callback([this](Metavision::timestamp ts, cv::Mat &frame) {
       try {
-        // 保存图像（如果需要）
+        // 保存图像（如果需要）- 使用FileSaveManager避免UI卡死
         if (recordFlag.load() && enableSaveImg.load()) {
-          cv::Mat frameCopy = frame.clone();  // 复制帧以避免数据竞争
-          std::lock_guard<std::mutex> lock(queueMutex);
-          imageQueue.push(frameCopy);
-          queueCondVar.notify_one();
+          uint64_t timeCount = std::chrono::duration_cast<std::chrono::microseconds>(
+              std::chrono::system_clock::now().time_since_epoch()).count();
+          QString filename = QString::fromStdString(saveFolderPath) + "/" + QString::number(timeCount) + "_dvs.png";
+
+          // 使用FileSaveManager异步保存，避免阻塞UI线程
+          FileSaveManager::getInstance()->saveDVSImage(frame, filename, timeCount);
         }
         
         // 创建QImage并发送信号
@@ -222,10 +225,10 @@ void DVSDataSource::initCamera() {
       }
     });
     
-    // 启动图像保存线程
-    for (int i = 0; i < 15; i++) {  // 减少线程数量，避免资源消耗过大
-      saveThread[i] = std::thread(&DVSDataSource::saveImageThread, this);
-    }
+    // 图像保存线程已废弃，现在使用FileSaveManager异步保存
+    // for (int i = 0; i < 15; i++) {  // 减少线程数量，避免资源消耗过大
+    //   saveThread[i] = std::thread(&DVSDataSource::saveImageThread, this);
+    // }
     
     // 只启动一次后处理线程
     if (!postProcessThreadStarted) {
@@ -378,12 +381,15 @@ void DVSDataSource::stopRecord() {
 // 开始录制
 void DVSDataSource::startRecord(const QString &path) {
   qDebug() << "Starting DVS record with path:" << path;
-  
+
+  // 启动文件保存服务
+  FileSaveManager::getInstance()->startService();
+
   // 如果正在录制，先停止并等待
   if (recordFlag.load()) {
     qDebug() << "DVS recording already active, stopping previous recording";
     stopRecord();
-    
+
     // 等待停止完成
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
   }
@@ -476,35 +482,35 @@ void DVSDataSource::setOverlapCount(int o) { overLapCount.store(o); }
 
 void DVSDataSource::syncImage() { syncImageFlag.store(true); }
 
-// 图像保存线程
-void DVSDataSource::saveImageThread()
-{
-	while (true)
-	
-	{
-		std::unique_lock<std::mutex> lock(queueMutex);
-		// printf("mdmdmmdmd");
-		queueCondVar.wait(lock,[this](){return !imageQueue.empty();});
-		// if (!running.load())break;
-		if (!imageQueue.empty())
-		{
-			std::cout << "DVS saving image, queue size: " << imageQueue.size() << std::endl;
-			cv::Mat img = imageQueue.front();
-			imageQueue.pop();
-			lock.unlock();
-			
-			// 只有在录制状态且启用图像保存时才保存
-			if (recordFlag.load() && enableSaveImg.load()) {
-		  uint64_t timeCount =
-            duration_cast<microseconds>(
-                system_clock::now().time_since_epoch())
-                .count();
-
-				cv::imwrite(saveFolderPath + "/"  + std::to_string(timeCount) +"_dvs.png", img);
-			}
-		}
-	}
-}
+// 图像保存线程 - 已废弃，现在使用FileSaveManager
+// void DVSDataSource::saveImageThread()
+// {
+// 	while (true)
+//
+// 	{
+// 		std::unique_lock<std::mutex> lock(queueMutex);
+// 		// printf("mdmdmmdmd");
+// 		queueCondVar.wait(lock,[this](){return !imageQueue.empty();});
+// 		// if (!running.load())break;
+// 		if (!imageQueue.empty())
+// 		{
+// 			std::cout << "DVS saving image, queue size: " << imageQueue.size() << std::endl;
+// 			cv::Mat img = imageQueue.front();
+// 			imageQueue.pop();
+// 			lock.unlock();
+//
+// 			// 只有在录制状态且启用图像保存时才保存
+// 			if (recordFlag.load() && enableSaveImg.load()) {
+// 		  uint64_t timeCount =
+//             duration_cast<microseconds>(
+//                 system_clock::now().time_since_epoch())
+//                 .count();
+//
+// 				cv::imwrite(saveFolderPath + "/"  + std::to_string(timeCount) +"_dvs.png", img);
+// 			}
+// 		}
+// 	}
+// }
 
 void DVSDataSource::loadFpn(const QString &fpn) {
   QFile file(fpn);
@@ -735,12 +741,14 @@ void DVSDataSource::setFPS(double fps) {
       // 重新设置帧回调
       frameGenerator->set_output_callback([this](Metavision::timestamp ts, cv::Mat &frame) {
         try {
-          // 保存图像（如果需要）
+          // 保存图像（如果需要）- 使用FileSaveManager避免UI卡死
           if (recordFlag.load() && enableSaveImg.load()) {
-            cv::Mat frameCopy = frame.clone();  // 复制帧以避免数据竞争
-            std::lock_guard<std::mutex> lock(queueMutex);
-            imageQueue.push(frameCopy);
-            queueCondVar.notify_one();
+            uint64_t timeCount = std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count();
+            QString filename = QString::fromStdString(saveFolderPath) + "/" + QString::number(timeCount) + "_dvs.png";
+
+            // 使用FileSaveManager异步保存，避免阻塞UI线程
+            FileSaveManager::getInstance()->saveDVSImage(frame, filename, timeCount);
           }
           
           // 创建QImage并发送信号

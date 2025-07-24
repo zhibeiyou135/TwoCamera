@@ -142,7 +142,19 @@ private:
 
   // RAW文件与DV图像同步播放
   void playRAWWithDVImages(const QString &rawFilePath, QList<QFileInfo> dvImgs);
-  
+
+  // 智能帧率检测方法
+  double detectDVFrameRate(const QList<QFileInfo> &dvImgs);
+
+  // 计算最优积累时间
+  uint32_t calculateOptimalAccumulationTime(double fps);
+
+  // 重置帧率检测状态
+  void resetFrameRateDetection();
+
+  // 从配置文件读取积累时间
+  uint32_t getAccumulationTimeFromConfig();
+
   // 解析RAW文件头
   bool parseRawFileHeader(FILE *file);
   

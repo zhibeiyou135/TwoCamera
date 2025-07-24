@@ -8,6 +8,7 @@
 #include "CropConfig.h"
 #include "DVDisplayConfig.h"
 #include "RecordingConfig.h"
+#include "FileSaveManager.h"
 #include <QElapsedTimer>
 #include <QDebug>
 #include <QFile>
@@ -414,31 +415,23 @@ bool CameraCapture::open(int index) {
             
             auto recordingConfig = RecordingConfig::getInstance();
             
-            // 保存原始图像（如果启用）
+            // 保存原始图像（如果启用）- 使用FileSaveManager避免UI卡死
             if (recordingConfig->getSaveDVOriginal()) {
-              std::lock_guard<std::mutex> lock(queueMutex);
-              // 直接使用海康SDK转换的BGR图像，不进行额外颜色转换
-              // OpenCV的imwrite函数期望BGR格式，所以直接保存colorConverted
-              imageQueue.push(colorConverted.clone());
               std::string filename = pathdv.toStdString()+"/" +std::to_string(timeCount) +"_original.png";
-              nameQueue.push(filename);
-              qDebug() << "海康相机: 保存原始BGR图像（海康SDK转换结果）";
+              // 使用FileSaveManager异步保存，避免阻塞UI线程
+              FileSaveManager::getInstance()->saveDVOriginal(colorConverted, QString::fromStdString(filename), timeCount);
+              qDebug() << "海康相机: 已提交原始BGR图像保存任务";
             }
             
-            // 保存裁剪图像（如果启用）
+            // 保存裁剪图像（如果启用）- 使用FileSaveManager避免UI卡死
             if (recordingConfig->getSaveDVCropped()) {
               // 应用旋转和裁剪处理，使用已经正确转换的图像
               cv::Mat processed = applyRotationAndCrop(colorConverted);
-              
-              // 直接保存BGR格式的裁剪图像，不进行颜色转换
-              // OpenCV的imwrite函数期望BGR格式
-              {
-                std::lock_guard<std::mutex> lock(queueMutex);
-                cropImageQueue.push(processed.clone());
-                std::string cropFilename = pathCrop.toStdString() + "/" + std::to_string(timeCount) + "_cropped.png";
-                cropNameQueue.push(cropFilename);
-                qDebug() << "海康相机: 保存裁剪BGR图像（海康SDK转换结果）";
-              }
+
+              std::string cropFilename = pathCrop.toStdString() + "/" + std::to_string(timeCount) + "_cropped.png";
+              // 使用FileSaveManager异步保存，避免阻塞UI线程
+              FileSaveManager::getInstance()->saveDVCropped(processed, QString::fromStdString(cropFilename), timeCount);
+              qDebug() << "海康相机: 已提交裁剪BGR图像保存任务";
             }
             
             queueCondVar.notify_one();
@@ -502,32 +495,30 @@ try_usb_camera:
           
           auto recordingConfig = RecordingConfig::getInstance();
           
-          // 保存原始图像（如果启用）
+          // 保存原始图像（如果启用）- 使用FileSaveManager避免UI卡死
           if (recordingConfig->getSaveDVOriginal()) {
-            std::lock_guard<std::mutex> lock(queueMutex);
             // USB相机图像转换为RGB格式保存
             cv::Mat rgbImage;
             cv::cvtColor(f, rgbImage, COLOR_BGR2RGB);
-            imageQueue.push(rgbImage.clone());
             std::string filename = pathdv.toStdString()+"/" +std::to_string(timeCount) +"_original.png";
-            nameQueue.push(filename);
-            qDebug() << "USB相机: 保存原始RGB图像";
+            // 使用FileSaveManager异步保存，避免阻塞UI线程
+            FileSaveManager::getInstance()->saveDVOriginal(rgbImage, QString::fromStdString(filename), timeCount);
+            qDebug() << "USB相机: 已提交原始RGB图像保存任务";
           }
           
-          // 保存裁剪图像（如果启用）
+          // 保存裁剪图像（如果启用）- 使用FileSaveManager避免UI卡死
           if (recordingConfig->getSaveDVCropped()) {
             // 应用旋转和裁剪处理
             cv::Mat processed = applyRotationAndCrop(f);
-            
+
             // 转换为RGB格式保存
             cv::Mat rgbProcessed;
             cv::cvtColor(processed, rgbProcessed, COLOR_BGR2RGB);
-            
-            std::lock_guard<std::mutex> lock(queueMutex);
-            cropImageQueue.push(rgbProcessed.clone());
+
             std::string cropFilename = pathCrop.toStdString() + "/" + std::to_string(timeCount) + "_cropped.png";
-            cropNameQueue.push(cropFilename);
-            qDebug() << "USB相机: 保存裁剪RGB图像";
+            // 使用FileSaveManager异步保存，避免阻塞UI线程
+            FileSaveManager::getInstance()->saveDVCropped(rgbProcessed, QString::fromStdString(cropFilename), timeCount);
+            qDebug() << "USB相机: 已提交裁剪RGB图像保存任务";
           }
           
           queueCondVar.notify_one();
@@ -586,6 +577,9 @@ void CameraCapture::startRecord(const QString &path) {
     }
   }
   
+  // 启动文件保存服务
+  FileSaveManager::getInstance()->startService();
+
   // 创建新的录制会话
   QString sessionPath = recordingConfig->createRecordingSession(sessionSuffix);
   qDebug() << "Starting DV camera recording session at:" << sessionPath;

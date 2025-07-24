@@ -118,11 +118,12 @@ private:
   
   void showImg(WrapImage &imgs);
 
-  std::thread saveThread[15];
-  std::queue<cv::Mat> imageQueue; // 队列，用于存储需要保存的图片 
-  std::mutex queueMutex; // 互斥量，用于保护队列的线程安全 
-  std::condition_variable queueCondVar; // 条件变量，用于通知保存线程有新图片 
-  void saveImageThread();
+  // 以下成员已废弃，现在使用FileSaveManager处理文件保存
+  // std::thread saveThread[15];
+  // std::queue<cv::Mat> imageQueue; // 队列，用于存储需要保存的图片
+  // std::mutex queueMutex; // 互斥量，用于保护队列的线程安全
+  // std::condition_variable queueCondVar; // 条件变量，用于通知保存线程有新图片
+  // void saveImageThread();
   
   // 静态成员，用于保存帧生成器和后处理线程
   static std::shared_ptr<Metavision::PeriodicFrameGenerationAlgorithm> frameGenerator;

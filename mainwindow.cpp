@@ -3,6 +3,7 @@
 #include "camera/CameraConfig.h"
 #include "camera/CamerasDetector.h"
 #include "camera/RecordingConfig.h"
+#include "camera/FileSaveManager.h"
 #include "dvs/DVSDataSource.h"
 #include "infer/detect/DetectModule_DV.h"
 #include "infer/detect/DetectModule_DVS.h"
@@ -55,6 +56,9 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
 
   // 注册cv::Mat类型以支持Qt信号槽系统
   qRegisterMetaType<cv::Mat>("cv::Mat");
+
+  // 启动文件保存管理服务，解决录制时UI卡死问题
+  FileSaveManager::getInstance()->startService();
 
   // 加载录制配置
   loadRecordingConfigFromJson(ConfigManager::getInstance().getConfigPath());
@@ -845,6 +849,9 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
 }
 
 MainWindow::~MainWindow() {
+  // 停止文件保存管理服务
+  FileSaveManager::getInstance()->stopService();
+
   // 清理socket实例
   if (socket) {
     delete socket;

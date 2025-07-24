@@ -1,0 +1,324 @@
+//
+// Created for TwoCamera_v6detect project
+// 文件保存管理器实现 - 解决录制过程中UI卡死问题
+//
+
+#include "FileSaveManager.h"
+#include <QDebug>
+#include <QDir>
+#include <QFileInfo>
+#include <QTextStream>
+#include <QMutexLocker>
+#include <chrono>
+#include <opencv2/opencv.hpp>
+
+// FileSaveWorker 实现
+FileSaveWorker::FileSaveWorker() 
+    : running(false), completedTasks(0), totalTasks(0) {
+}
+
+FileSaveWorker::~FileSaveWorker() {
+    stop();
+}
+
+void FileSaveWorker::addTask(const FileSaveTask &task) {
+    QMutexLocker locker(&queueMutex);
+    taskQueue.enqueue(task);
+    totalTasks.fetch_add(1);
+    queueCondition.wakeOne();
+    
+    emit queueSizeChanged(taskQueue.size());
+}
+
+void FileSaveWorker::stop() {
+    running.store(false);
+    queueCondition.wakeAll();
+}
+
+void FileSaveWorker::processQueue() {
+    running.store(true);
+    qDebug() << "文件保存工作线程启动";
+    
+    while (running.load()) {
+        FileSaveTask task;
+        bool hasTask = false;
+        
+        // 获取任务
+        {
+            QMutexLocker locker(&queueMutex);
+            if (taskQueue.isEmpty()) {
+                queueCondition.wait(&queueMutex, 100); // 等待100ms
+                continue;
+            }
+            
+            task = taskQueue.dequeue();
+            hasTask = true;
+            emit queueSizeChanged(taskQueue.size());
+        }
+        
+        if (!hasTask) continue;
+        
+        // 处理任务
+        bool success = false;
+        QString filePath = task.filePath;
+        
+        try {
+            // 确保目录存在
+            QFileInfo fileInfo(filePath);
+            QDir().mkpath(fileInfo.absolutePath());
+            
+            switch (task.type) {
+                case FileSaveTask::SAVE_DV_ORIGINAL:
+                case FileSaveTask::SAVE_DV_CROPPED:
+                case FileSaveTask::SAVE_DVS_IMAGE:
+                    success = saveOpenCVImage(task.image, filePath);
+                    break;
+                    
+                case FileSaveTask::SAVE_DETECTION_RESULT:
+                    success = saveTextFile(task.content, filePath);
+                    break;
+                    
+                default:
+                    qDebug() << "未知的文件保存任务类型:" << task.type;
+                    break;
+            }
+            
+        } catch (const std::exception &e) {
+            qDebug() << "文件保存异常:" << e.what() << "文件:" << filePath;
+            success = false;
+        }
+        
+        // 更新统计信息
+        int completed = completedTasks.fetch_add(1) + 1;
+        emit taskCompleted(filePath, success);
+        emit saveProgress(completed, totalTasks.load());
+        
+        if (!success) {
+            qDebug() << "文件保存失败:" << filePath;
+        }
+    }
+    
+    qDebug() << "文件保存工作线程停止";
+}
+
+bool FileSaveWorker::saveOpenCVImage(const cv::Mat &image, const QString &filePath) {
+    if (image.empty()) {
+        qDebug() << "图像为空，无法保存:" << filePath;
+        return false;
+    }
+    
+    try {
+        bool result = cv::imwrite(filePath.toStdString(), image);
+        if (result) {
+            qDebug() << "图像保存成功:" << filePath;
+        } else {
+            qDebug() << "图像保存失败:" << filePath;
+        }
+        return result;
+    } catch (const cv::Exception &e) {
+        qDebug() << "OpenCV保存图像异常:" << e.what() << "文件:" << filePath;
+        return false;
+    }
+}
+
+bool FileSaveWorker::saveQImage(const QImage &image, const QString &filePath) {
+    if (image.isNull()) {
+        qDebug() << "QImage为空，无法保存:" << filePath;
+        return false;
+    }
+    
+    bool result = image.save(filePath);
+    if (result) {
+        qDebug() << "QImage保存成功:" << filePath;
+    } else {
+        qDebug() << "QImage保存失败:" << filePath;
+    }
+    return result;
+}
+
+bool FileSaveWorker::saveTextFile(const QString &content, const QString &filePath) {
+    QFile file(filePath);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        qDebug() << "无法打开文件进行写入:" << filePath;
+        return false;
+    }
+    
+    QTextStream out(&file);
+    out << content;
+    file.close();
+    
+    qDebug() << "文本文件保存成功:" << filePath;
+    return true;
+}
+
+// FileSaveManager 实现
+FileSaveManager* FileSaveManager::instance = nullptr;
+
+FileSaveManager::FileSaveManager() 
+    : workerThread(nullptr), worker(nullptr), serviceRunning(false),
+      currentQueueSize(0), completedTaskCount(0), totalTaskCount(0) {
+}
+
+FileSaveManager::~FileSaveManager() {
+    stopService();
+}
+
+FileSaveManager* FileSaveManager::getInstance() {
+    if (!instance) {
+        instance = new FileSaveManager();
+    }
+    return instance;
+}
+
+void FileSaveManager::startService() {
+    if (serviceRunning.load()) {
+        qDebug() << "文件保存服务已经在运行";
+        return;
+    }
+    
+    qDebug() << "启动文件保存服务";
+    
+    // 创建工作线程和工作对象
+    workerThread = new QThread(this);
+    worker = new FileSaveWorker();
+    worker->moveToThread(workerThread);
+    
+    // 连接信号
+    connect(workerThread, &QThread::started, worker, &FileSaveWorker::processQueue);
+    connect(worker, &FileSaveWorker::taskCompleted, this, &FileSaveManager::onTaskCompleted);
+    connect(worker, &FileSaveWorker::queueSizeChanged, this, &FileSaveManager::onQueueSizeChanged);
+    connect(worker, &FileSaveWorker::saveProgress, this, &FileSaveManager::onSaveProgress);
+    
+    // 启动线程
+    workerThread->start();
+    serviceRunning.store(true);
+    
+    emit serviceStarted();
+    qDebug() << "文件保存服务启动完成";
+}
+
+void FileSaveManager::stopService() {
+    if (!serviceRunning.load()) {
+        return;
+    }
+    
+    qDebug() << "停止文件保存服务";
+    serviceRunning.store(false);
+    
+    if (worker) {
+        worker->stop();
+    }
+    
+    if (workerThread) {
+        workerThread->quit();
+        if (!workerThread->wait(5000)) {
+            qDebug() << "工作线程停止超时，强制终止";
+            workerThread->terminate();
+            workerThread->wait(1000);
+        }
+        
+        delete worker;
+        worker = nullptr;
+        
+        workerThread->deleteLater();
+        workerThread = nullptr;
+    }
+    
+    emit serviceStopped();
+    qDebug() << "文件保存服务停止完成";
+}
+
+void FileSaveManager::saveDVOriginal(const cv::Mat &image, const QString &filePath, uint64_t timestamp) {
+    if (!serviceRunning.load()) {
+        qDebug() << "文件保存服务未启动，无法保存DV原始图像";
+        return;
+    }
+    
+    FileSaveTask task;
+    task.type = FileSaveTask::SAVE_DV_ORIGINAL;
+    task.image = image.clone(); // 深拷贝避免数据竞争
+    task.filePath = filePath;
+    task.timestamp = timestamp;
+    
+    worker->addTask(task);
+}
+
+void FileSaveManager::saveDVCropped(const cv::Mat &image, const QString &filePath, uint64_t timestamp) {
+    if (!serviceRunning.load()) {
+        qDebug() << "文件保存服务未启动，无法保存DV裁剪图像";
+        return;
+    }
+    
+    FileSaveTask task;
+    task.type = FileSaveTask::SAVE_DV_CROPPED;
+    task.image = image.clone(); // 深拷贝避免数据竞争
+    task.filePath = filePath;
+    task.timestamp = timestamp;
+    
+    worker->addTask(task);
+}
+
+void FileSaveManager::saveDVSImage(const cv::Mat &image, const QString &filePath, uint64_t timestamp) {
+    if (!serviceRunning.load()) {
+        qDebug() << "文件保存服务未启动，无法保存DVS图像";
+        return;
+    }
+    
+    FileSaveTask task;
+    task.type = FileSaveTask::SAVE_DVS_IMAGE;
+    task.image = image.clone(); // 深拷贝避免数据竞争
+    task.filePath = filePath;
+    task.timestamp = timestamp;
+    
+    worker->addTask(task);
+}
+
+void FileSaveManager::saveDetectionResult(const QString &content, const QString &filePath, uint64_t timestamp) {
+    if (!serviceRunning.load()) {
+        qDebug() << "文件保存服务未启动，无法保存检测结果";
+        return;
+    }
+    
+    FileSaveTask task;
+    task.type = FileSaveTask::SAVE_DETECTION_RESULT;
+    task.content = content;
+    task.filePath = filePath;
+    task.timestamp = timestamp;
+    
+    worker->addTask(task);
+}
+
+int FileSaveManager::getQueueSize() const {
+    return currentQueueSize.load();
+}
+
+int FileSaveManager::getCompletedTasks() const {
+    return completedTaskCount.load();
+}
+
+int FileSaveManager::getTotalTasks() const {
+    return totalTaskCount.load();
+}
+
+void FileSaveManager::clearQueue() {
+    if (worker) {
+        // 这里可以添加清空队列的逻辑
+        qDebug() << "清空文件保存队列";
+    }
+}
+
+void FileSaveManager::onTaskCompleted(const QString &filePath, bool success) {
+    completedTaskCount.fetch_add(1);
+    emit saveCompleted(filePath, success);
+}
+
+void FileSaveManager::onQueueSizeChanged(int size) {
+    currentQueueSize.store(size);
+    emit queueStatusChanged(size, completedTaskCount.load(), totalTaskCount.load());
+}
+
+void FileSaveManager::onSaveProgress(int completed, int total) {
+    emit queueStatusChanged(currentQueueSize.load(), completed, total);
+}
+
+#include "FileSaveManager.moc"
