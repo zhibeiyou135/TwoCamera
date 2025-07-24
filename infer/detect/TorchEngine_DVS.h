@@ -20,10 +20,13 @@ const float DVS_HEIGHT_SCALE = 720.0 / 416.0;
 
 class TorchEngine_DVS {
 private:
-  const int color_list[1][3] = {
-      {0, 255, 0}
+  const int color_list[4][3] = {
+      {0, 255, 0},    // 绿色 - 缺陷类别1
+      {255, 0, 0},    // 红色 - 缺陷类别2
+      {0, 0, 255},    // 蓝色 - 缺陷类别3
+      {255, 255, 0}   // 黄色 - 缺陷类别4
   };
-  
+
   struct Box {
     int left;
     int top;
@@ -32,13 +35,13 @@ private:
     int cls;
     float confidence;
   };
-  
-  const std::string name[1]{"box1"};
+
+  const std::string name[4]{"huanhen", "dian", "wuzi", "liangdai"};
   static const int WIDTH = 640;
   static const int HEIGHT = 416;
   static const int CHANNEL = 3;
   static const int OUTMAPNUM=16380;
-  static const int CLASSNUM=1;
+  static const int CLASSNUM=4;
   
 #ifdef TORCH_ENABLE
   torch::jit::script::Module model;

@@ -38,14 +38,14 @@
         "iou_threshold": 0.2,
         "input_width": 640,
         "input_height": 384,
-        "num_classes": 10
+        "num_classes": 4
       },
       "dvs": {
         "confidence_threshold": 0.45,
         "iou_threshold": 0.2,
         "input_width": 640,
         "input_height": 384,
-        "num_classes": 10
+        "num_classes": 4
       }
     }
   },
