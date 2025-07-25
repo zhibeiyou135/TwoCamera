@@ -160,6 +160,10 @@ private:
   // 检测使能标志
   bool detectionEnabled = false;
 
+  // 当前处理的图像文件名跟踪
+  QString currentDVFilename;
+  QString currentDVSFilename;
+
   // 显示状态管理器相关成员
   DisplayMode currentDisplayMode = DisplayMode::CAMERA_VIEW;
   QElapsedTimer dvDisplayTimer;

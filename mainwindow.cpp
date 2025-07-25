@@ -669,6 +669,11 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
                                        Q_ARG(QImage, qimg),
                                        Q_ARG(QString, "DV"));
 
+              // 为实时相机生成文件名
+              uint64_t timestamp = std::chrono::duration_cast<std::chrono::microseconds>(
+                  std::chrono::system_clock::now().time_since_epoch()).count();
+              currentDVFilename = QString("%1_dv.png").arg(timestamp);
+
               // 如果检测功能启用，将图像传递给独立的检测处理方法
               if (detectionEnabled) {
                 // 使用Qt::QueuedConnection确保线程安全，统一架构
@@ -835,6 +840,14 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
   // 连接PlaybackReader的nextImagePair信号到检测模块
   connect(PlaybackReader::getInstance(), &PlaybackReader::nextImagePair, this, &MainWindow::onPlaybackImagePair);
 
+  // 连接带文件名的图像对信号以更新当前文件名
+  connect(PlaybackReader::getInstance(), &PlaybackReader::nextImagePairWithFilenames, this,
+          [this](QImage dv, QImage dvs, QString dvFilename, QString dvsFilename) {
+            // 更新当前处理的文件名
+            currentDVFilename = dvFilename;
+            currentDVSFilename = dvsFilename;
+          });
+
   auto *widget = new QWidget();
   widget->setLayout(vboxLayout);
   setCentralWidget(widget);
@@ -930,6 +943,11 @@ void MainWindow::closeEvent(QCloseEvent *event) {
 void MainWindow::updateDVSView(QImage img) {
   // 使用统一的显示管理器更新相机画面
   updateCameraDisplay(img, "DVS");
+
+  // 为实时DVS相机生成文件名
+  uint64_t timestamp = std::chrono::duration_cast<std::chrono::microseconds>(
+      std::chrono::system_clock::now().time_since_epoch()).count();
+  currentDVSFilename = QString("%1_dvs.png").arg(timestamp);
 
   // 如果检测功能启用，将图像传递给独立的检测处理方法
   if (detectionEnabled) {
@@ -1850,7 +1868,15 @@ void MainWindow::saveDetectionResultImage(const QImage &img, const QString &came
   uint64_t timestamp = std::chrono::duration_cast<std::chrono::microseconds>(
       std::chrono::system_clock::now().time_since_epoch()).count();
 
-  FileSaveManager::getInstance()->saveDetectionImageWithThrottling(img, cameraType, timestamp);
+  // 获取当前处理的原始文件名
+  QString originalFilename;
+  if (cameraType == "DV") {
+    originalFilename = currentDVFilename;
+  } else if (cameraType == "DVS") {
+    originalFilename = currentDVSFilename;
+  }
+
+  FileSaveManager::getInstance()->saveDetectionImageWithThrottling(img, cameraType, timestamp, originalFilename);
 }
 
 // 加载主配置文件

@@ -188,6 +188,7 @@ public slots:
 signals:
 
   void nextImagePair(QImage dv, QImage dvs);
+  void nextImagePairWithFilenames(QImage dv, QImage dvs, QString dvFilename, QString dvsFilename);
 
   void complete();
   

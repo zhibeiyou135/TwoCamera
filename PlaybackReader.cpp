@@ -405,8 +405,11 @@ void PlaybackReader::playDVwithoutDVS(QList<QFileInfo> dvImgs) {
   
   dvImgs.pop_front();
   
-  // 发送图像对
+  // 发送图像对（包含文件名信息）
+  QString dvFilename = currentImgInfo.fileName();
+  QString dvsFilename = ""; // DVS没有对应文件，使用空字符串
   emit nextImagePair(dvImg, dvsImg);
+  emit nextImagePairWithFilenames(dvImg, dvsImg, dvFilename, dvsFilename);
   
   if (dvImgs.empty()) {
     qDebug() << "DV回放结束: 这是最后一张图片";
@@ -1260,8 +1263,23 @@ void PlaybackReader::playRAWWithDVImages(const QString &rawFilePath, QList<QFile
       QImage dvsImage(rgbFrame.data, rgbFrame.cols, rgbFrame.rows,
                      rgbFrame.step, QImage::Format_RGB888);
 
-      // 发送同步的图像对
+      // 发送同步的图像对（包含文件名信息）
+      QString dvFilename = (dvImageIndex >= 0 && dvImageIndex < dvImgs.size()) ?
+                          dvImgs[dvImageIndex].fileName() : "";
+      QString dvsFilename = ""; // DVS来自RAW文件，生成对应的文件名
+      if (!dvFilename.isEmpty()) {
+        // 为DVS生成对应的文件名（将dv替换为dvs）
+        QFileInfo dvFileInfo(dvFilename);
+        QString baseName = dvFileInfo.baseName();
+        if (baseName.endsWith("_cropped")) {
+          baseName = baseName.left(baseName.length() - 8);
+        }
+        baseName = baseName.replace("dv", "dvs", Qt::CaseInsensitive);
+        dvsFilename = baseName + "." + dvFileInfo.suffix();
+      }
+
       emit nextImagePair(currentDVImage, dvsImage.copy());
+      emit nextImagePairWithFilenames(currentDVImage, dvsImage.copy(), dvFilename, dvsFilename);
 
       // 计算并发送进度（基于DV图像总数）
       double progress = (double)(dvImageIndex + 1) / dvImgs.size();

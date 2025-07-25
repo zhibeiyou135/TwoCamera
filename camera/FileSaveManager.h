@@ -95,7 +95,7 @@ public:
     void saveDVSDetectionImage(const QImage &image, const QString &filePath, uint64_t timestamp = 0, int priority = 3);
 
     // 智能限流的检测结果保存
-    void saveDetectionImageWithThrottling(const QImage &image, const QString &cameraType, uint64_t timestamp = 0);
+    void saveDetectionImageWithThrottling(const QImage &image, const QString &cameraType, uint64_t timestamp = 0, const QString &originalFilename = QString());
     
     // 获取队列状态
     int getQueueSize() const;

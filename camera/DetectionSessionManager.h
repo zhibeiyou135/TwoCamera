@@ -45,7 +45,6 @@ public:
     // 路径生成
     QString getDetectionResultPath(const QString& cameraType);
     QString getCurrentSessionPath() const;
-    QString getSourceFolderName() const;
 
     // 会话验证
     bool isCurrentSessionValid() const;
@@ -78,10 +77,6 @@ private:
     // 路径缓存，避免重复计算和目录创建
     mutable QMutex pathCacheMutex;
     QHash<QString, QString> pathCache;
-
-    // 源文件夹名称缓存
-    mutable QString cachedSourceFolderName;
-    mutable qint64 sourceFolderCacheTime;
 };
 
 #endif // DETECTION_SESSION_MANAGER_H

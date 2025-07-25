@@ -11,6 +11,7 @@
 #include <QFileInfo>
 #include <QTextStream>
 #include <QDateTime>
+#include <QRegExp>
 #include <QMutexLocker>
 #include <QDateTime>
 #include <chrono>
@@ -349,7 +350,7 @@ void FileSaveManager::saveDVSDetectionImage(const QImage &image, const QString &
     worker->addTask(task);
 }
 
-void FileSaveManager::saveDetectionImageWithThrottling(const QImage &image, const QString &cameraType, uint64_t timestamp) {
+void FileSaveManager::saveDetectionImageWithThrottling(const QImage &image, const QString &cameraType, uint64_t timestamp, const QString &originalFilename) {
     if (!serviceRunning.load() || image.isNull()) {
         return;
     }
@@ -394,15 +395,33 @@ void FileSaveManager::saveDetectionImageWithThrottling(const QImage &image, cons
         return;
     }
 
-    // 生成文件名 - 格式: {源文件夹名称}_{相机类型}_detection_{时间戳}_{微秒时间戳}.png
-    QString sourceFolderName = sessionManager->getSourceFolderName();
-    QString timestampStr = QDateTime::currentDateTime().toString("yyyy-MM-dd_HH-mm-ss-zzz");
-    QString filename = QString("%1/%2_%3_detection_%4_%5.png")
-                      .arg(detectResultPath)
-                      .arg(sourceFolderName)
-                      .arg(cameraType.toLower())
-                      .arg(timestampStr)
-                      .arg(timestamp);
+    // 生成文件名 - 格式: {原始图片文件名}_detect.png
+    QString filename;
+
+    if (!originalFilename.isEmpty()) {
+        // 使用原始文件名生成检测结果文件名
+        QFileInfo fileInfo(originalFilename);
+        QString baseName = fileInfo.baseName();
+
+        // 处理回放模式中DVS没有对应图片文件的情况
+        if (cameraType == "DVS" && !baseName.contains("dvs", Qt::CaseInsensitive)) {
+            // 如果是DVS但文件名中没有dvs，将dv替换为dvs
+            baseName = baseName.replace("dv", "dvs", Qt::CaseInsensitive);
+        }
+
+        // 清理文件名中的特殊字符
+        baseName = baseName.replace(QRegExp("[<>:\"/\\\\|?*]"), "_");
+
+        filename = QString("%1/%2_detect.png").arg(detectResultPath).arg(baseName);
+    } else {
+        // 回退到简化的命名方式（兼容性）
+        QString timestampStr = QDateTime::currentDateTime().toString("yyyy-MM-dd_HH-mm-ss-zzz");
+        filename = QString("%1/%2_detection_%3_%4.png")
+                          .arg(detectResultPath)
+                          .arg(cameraType.toLower())
+                          .arg(timestampStr)
+                          .arg(timestamp);
+    }
 
     // 异步保存
     if (cameraType == "DV") {

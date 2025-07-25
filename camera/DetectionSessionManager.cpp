@@ -5,8 +5,6 @@
 #include <QJsonObject>
 #include <QFile>
 #include <QStandardPaths>
-#include <QFileInfo>
-#include <QRegExp>
 
 DetectionSessionManager* DetectionSessionManager::instance = nullptr;
 
@@ -17,7 +15,7 @@ DetectionSessionManager* DetectionSessionManager::getInstance() {
     return instance;
 }
 
-DetectionSessionManager::DetectionSessionManager() : sourceFolderCacheTime(0) {
+DetectionSessionManager::DetectionSessionManager() {
     // 异步加载配置，避免阻塞构造函数
     QtConcurrent::run([this]() {
         loadConfiguration();
@@ -123,9 +121,7 @@ void DetectionSessionManager::startDetectionSession() {
         pathCache.clear();
     }
 
-    // 清空源文件夹名称缓存
-    cachedSourceFolderName.clear();
-    sourceFolderCacheTime = 0;
+
 
     qDebug() << "检测会话启动完成，会话路径:" << currentSessionPath;
 }
@@ -163,9 +159,7 @@ void DetectionSessionManager::resetDetectionSession() {
                 pathCache.clear();
             }
 
-            // 清空源文件夹名称缓存
-            cachedSourceFolderName.clear();
-            sourceFolderCacheTime = 0;
+
         }
     }
 
@@ -254,58 +248,7 @@ QString DetectionSessionManager::getCurrentSessionPath() const {
     return currentSessionPath;
 }
 
-QString DetectionSessionManager::getSourceFolderName() const {
-    QMutexLocker locker(&sessionMutex);
 
-    // 检查缓存是否有效（5秒内有效）
-    qint64 currentTime = QDateTime::currentMSecsSinceEpoch();
-    if (!cachedSourceFolderName.isEmpty() &&
-        (currentTime - sourceFolderCacheTime) < 5000) {
-        return cachedSourceFolderName;
-    }
-
-    QString sessionPath;
-
-    // 优先使用当前检测会话路径
-    if (!currentSessionPath.isEmpty()) {
-        sessionPath = currentSessionPath;
-    } else {
-        // 如果没有检测会话路径，尝试获取录制会话路径
-        auto recordingConfig = RecordingConfig::getInstance();
-        sessionPath = recordingConfig->getCurrentSessionPath();
-
-        // 如果录制会话路径也为空，使用基础路径加默认会话名
-        if (sessionPath.isEmpty()) {
-            QString basePath = recordingConfig->getBasePath();
-            QString timestamp = QDateTime::currentDateTime().toString("yyyy-MM-dd_HH-mm-ss");
-            sessionPath = basePath + "/" + timestamp + "_detection_session";
-        }
-    }
-
-    // 提取文件夹名称
-    QFileInfo pathInfo(sessionPath);
-    QString folderName = pathInfo.fileName();
-
-    // 如果文件夹名称为空或只是基础路径，生成默认名称
-    if (folderName.isEmpty() || folderName == "." || folderName == "..") {
-        folderName = QDateTime::currentDateTime().toString("yyyy-MM-dd_HH-mm-ss") + "_session";
-    }
-
-    // 清理文件夹名称，移除可能导致文件名问题的字符
-    // 保留中文字符，只替换文件系统不支持的特殊字符
-    folderName = folderName.replace(QRegExp("[<>:\"/\\\\|?*]"), "_");
-
-    // 限制文件夹名称长度，避免文件名过长
-    if (folderName.length() > 100) {
-        folderName = folderName.left(100);
-    }
-
-    // 更新缓存
-    cachedSourceFolderName = folderName;
-    sourceFolderCacheTime = currentTime;
-
-    return folderName;
-}
 
 bool DetectionSessionManager::isCurrentSessionValid() const {
     QMutexLocker locker(&sessionMutex);
