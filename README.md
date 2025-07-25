@@ -496,6 +496,7 @@ session_folder/
 
 # TwoCamera系统回放功能完整逻辑流程图
 
+
 ```mermaid
 flowchart TD
     %% 样式定义
@@ -518,63 +519,60 @@ flowchart TD
     %% 文件检测和验证
     FILE_DETECT[文件检测阶段<br/>- 检查DVS RAW文件存在性<br/>- 扫描DV图像文件<br/>- 验证文件格式和完整性]:::process
     
+    %% 批量回放判断
+    BATCH_DETECT{是否为批量回放（是目录）?}:::decision
+    COLLECT_SESSIONS[收集所有会话文件夹]:::process
+    SESSION_VALIDATE[验证会话有效性]:::process
+    BATCH_START[开始批量回放]:::process
+    PLAY_CURRENT[播放当前会话]:::process
+    
     %% 回放模式判断
     MODE_DECISION{回放模式判断<br/>hasDVS && hasDV?}:::decision
     
     %% 三种回放模式分支
-    PURE_DVS[纯DVS RAW回放<br/>visualizeRawFile]:::process
-    PURE_DV[纯DV图像回放<br/>playDVwithoutDVS]:::process
-    SYNC_PLAYBACK[同步回放<br/>playRAWWithDVImages]:::sync
+    PURE_DVS[只有DVS - 纯RAW文件回放]:::process
+    PURE_DV[只有DV - 图像序列回放]:::process
+    SYNC_PLAYBACK[DVS+DV - 同步回放]:::process
     
     %% 纯DVS回放流程
-    DVS_CAMERA_INIT[Metavision Camera初始化<br/>Camera::from_file]:::process
-    DVS_FRAME_GEN[创建帧生成算法<br/>PeriodicFrameGenerationAlgorithm<br/>参数: 1280x720, 10ms, 25fps]:::process
-    DVS_CALLBACK[设置帧输出回调<br/>转换cv::Mat到QImage<br/>emit nextImagePair]:::ui
-    DVS_EVENT_LOOP[事件处理循环<br/>EventLoop::poll_and_dispatch<br/>while(running)]:::process
+    DVS_CAMERA_INIT[初始化DVS相机]:::process
+    DVS_FRAME_GEN[生成DVS帧]:::process
+    DVS_CALLBACK[DVS事件回调处理]:::process
+    DVS_EVENT_LOOP[DVS事件循环]:::process
     
     %% 纯DV回放流程
-    DV_LOAD_IMG[加载DV图像<br/>loadAndProcessDVImage]:::process
-    DV_TIMESTAMP[提取时间戳<br/>处理_cropped后缀<br/>baseName.toLongLong()]:::process
-    DV_EMIT[发送图像对<br/>emit nextImagePair<br/>(dvImg, 空白dvsImg)]:::ui
-    DV_DELAY_CALC[计算帧间延迟<br/>基于时间戳差异<br/>最少30ms]:::process
-    DV_SCHEDULE[调度下一帧<br/>QTimer::singleShot<br/>递归调用]:::process
+    DV_LOAD_IMG[加载DV图像]:::process
+    DV_TIMESTAMP[处理DV图像时间戳]:::process
+    DV_EMIT[发送DV图像信号]:::process
+    DV_DELAY_CALC[计算DV延迟]:::process
+    DV_SCHEDULE[调度DV图像播放]:::process
     
-    %% 同步回放核心流程
-    SYNC_INIT[同步回放初始化]:::sync
-    PRESCAN_RAW[预扫描RAW文件<br/>获取DVS时间范围<br/>dvsStartTimestamp, dvsEndTimestamp]:::sync
-    PRESCAN_DV[预扫描DV图像<br/>获取时间戳范围<br/>firstDVTimestamp, lastDVTimestamp]:::sync
-    CALC_SCALE[计算时间缩放因子<br/>timeScaleFactor = DV总时长 / DVS总时长]:::sync
-    
-    SYNC_CAMERA_INIT[初始化Metavision Camera<br/>创建帧生成算法]:::sync
-    SYNC_CALLBACK[设置同步回调函数]:::sync
-    
-    %% 同步回调内部逻辑
-    TIMESTAMP_MAP[时间戳映射<br/>dvsRelativeTime = dvsTimestamp - dvsStartTimestamp<br/>mappedDVTimestamp = firstDVTimestamp + dvsRelativeTime * timeScaleFactor]:::sync
-    FIND_CLOSEST[查找最匹配DV图像<br/>findClosestDVImage<br/>基于映射后的时间戳]:::sync
-    UPDATE_DV[更新当前DV图像<br/>如果找到更匹配的图像]:::sync
-    EMIT_PAIR[发送同步图像对<br/>emit nextImagePair(dvImg, dvsImg)<br/>emit nextImagePairWithFilenames]:::ui
-    
-    %% 批量回放流程
-    BATCH_DETECT{检测批量回放<br/>是否为目录且包含子会话?}:::decision
-    COLLECT_SESSIONS[收集会话文件夹<br/>collectSessionFolders<br/>递归遍历子目录]:::process
-    SESSION_VALIDATE[验证会话有效性<br/>检查dv_original和dvs_raw/dvs_images]:::process
-    BATCH_START[启动批量回放<br/>emit batchPlaybackStarted<br/>currentSessionIndex = 0]:::process
-    PLAY_CURRENT[播放当前会话<br/>playNextSession]:::process
+    %% 同步回放流程
+    SYNC_INIT[同步回放初始化]:::process
+    PRESCAN_RAW[预扫描RAW文件]:::process
+    PRESCAN_DV[预扫描DV图像]:::process
+    CALC_SCALE[计算同步比例]:::process
+    SYNC_CAMERA_INIT[初始化同步相机]:::process
+    SYNC_CALLBACK[同步事件回调处理]:::process
+    TIMESTAMP_MAP[建立时间戳映射]:::process
+    FIND_CLOSEST[查找最接近的时间戳]:::process
+    UPDATE_DV[更新DV图像]:::process
+    EMIT_PAIR[发送图像对信号]:::process
     
     %% 检测功能集成
-    DETECTION_CHECK{检测功能启用?}:::decision
-    DETECTION_PROCESS[检测处理流程<br/>onPlaybackImagePair<br/>转换图像格式]:::detection
-    DV_DETECTION[DV检测处理<br/>processDVImageForDetection<br/>convertQImageToBGRMat]:::detection
-    DVS_DETECTION[DVS检测处理<br/>processDVSImageForDetection<br/>送入检测模块]:::detection
-    DETECTION_DISPLAY[检测结果显示<br/>在UI上绘制检测框]:::detection
+    DETECTION_CHECK{是否启用检测功能?}:::decision
+    DETECTION_PROCESS[启动检测处理]:::process
+    DV_DETECTION[DV图像检测]:::process
+    DVS_DETECTION[DVS图像检测]:::process
+    DETECTION_DISPLAY[显示检测结果]:::process
     
-    %% UI显示管理
+    %% UI显示
     UI_DISPLAY[统一显示管理<br/>updateCameraDisplay<br/>DisplayMode切换]:::ui
     
-    %% 会话切换机制
+    %% 会话切换逻辑
     PLAYBACK_FINISHED[回放完成处理<br/>handlePlaybackFinished]:::process
-    BATCH_CHECK{批量回放模式?}:::decision
-    NEXT_SESSION_CHECK{还有下一个会话?}:::decision
+    BATCH_CHECK{是否为批量回放模式?}:::decision
+    NEXT_SESSION_CHECK{是否还有下一个会话?}:::decision
     STOP_CURRENT[停止当前播放<br/>stopPlayback<br/>等待线程结束]:::process
     DELAY_SWITCH[延迟1秒<br/>确保清理完成]:::process
     NEXT_SESSION[播放下一会话<br/>currentSessionIndex++<br/>playNextSession]:::process
@@ -657,22 +655,17 @@ flowchart TD
     NEXT_SESSION_CHECK -->|无下一个| CLEANUP
     STOP_CURRENT --> DELAY_SWITCH
     DELAY_SWITCH --> NEXT_SESSION
-    NEXT_SESSION --> MODE_DECISION
     
-    %% 错误处理连接
-    FILE_DETECT -->|文件错误| ERROR_HANDLE
-    DVS_CAMERA_INIT -->|初始化失败| ERROR_HANDLE
-    SYNC_CAMERA_INIT -->|初始化失败| ERROR_HANDLE
-    SESSION_VALIDATE -->|会话无效| SKIP_SESSION
-    ERROR_HANDLE --> SKIP_SESSION
+    %% 错误处理
+    DVS_CAMERA_INIT -->|失败| ERROR_HANDLE
+    SYNC_CAMERA_INIT -->|失败| ERROR_HANDLE
+    FILE_DETECT -->|失败| ERROR_HANDLE
+    ERROR_HANDLE -->|批量| SKIP_SESSION
     SKIP_SESSION --> NEXT_SESSION_CHECK
+    ERROR_HANDLE -->|单会话| CLEANUP
     
-    %% 完成流程
+    %% 完成和清理
     CLEANUP --> COMPLETE
-    
-    %% 循环连接（虚线表示）
-    DVS_EVENT_LOOP -.->|继续播放| DVS_EVENT_LOOP
-    TIMESTAMP_MAP -.->|下一帧| TIMESTAMP_MAP
 ```
 </mermaid>
 
