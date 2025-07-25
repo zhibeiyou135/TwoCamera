@@ -4,6 +4,7 @@
 #include "camera/CamerasDetector.h"
 #include "camera/RecordingConfig.h"
 #include "camera/FileSaveManager.h"
+#include "camera/DetectionSessionManager.h"
 #include "dvs/DVSDataSource.h"
 #include "infer/detect/DetectModule_DV.h"
 #include "infer/detect/DetectModule_DVS.h"
@@ -847,6 +848,43 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
           &CameraCapture::startRecord);
   connect(this, &MainWindow::stopRecord, CameraCapture::getInstance(),
           &CameraCapture::stopRecord);
+
+  // 连接录制信号到检测会话管理 - 优化为仅在必要时重置
+  connect(this, &MainWindow::startRecord, this, [this](const QString& path) {
+    // 录制开始时，只有在检测会话配置为创建独立文件夹时才重置
+    if (detectionEnabled) {
+      QtConcurrent::run([this, path]() {
+        auto sessionManager = DetectionSessionManager::getInstance();
+        const auto& config = sessionManager->getConfig();
+
+        // 只有在配置为不创建会话文件夹时才重置（使用录制会话）
+        if (!config.createSessionFolders) {
+          sessionManager->resetDetectionSession();
+          qDebug() << "录制开始，检测会话已重置以使用录制会话:" << path;
+        } else {
+          qDebug() << "录制开始，检测会话保持独立，不重置:" << path;
+        }
+      });
+    }
+  });
+
+  connect(this, &MainWindow::stopRecord, this, [this]() {
+    // 录制停止时，只有在使用录制会话的情况下才重置为独立会话
+    if (detectionEnabled) {
+      QtConcurrent::run([this]() {
+        auto sessionManager = DetectionSessionManager::getInstance();
+        const auto& config = sessionManager->getConfig();
+
+        // 只有在配置为不创建会话文件夹时才重置（恢复独立会话）
+        if (!config.createSessionFolders) {
+          sessionManager->resetDetectionSession();
+          qDebug() << "录制停止，检测会话已重置为独立会话";
+        } else {
+          qDebug() << "录制停止，检测会话保持独立，不重置";
+        }
+      });
+    }
+  });
 }
 
 MainWindow::~MainWindow() {
@@ -1553,6 +1591,12 @@ void MainWindow::onDetectionToggled(bool enabled) {
   if (enabled) {
     qDebug() << "启用检测功能，启动推理线程";
 
+    // 异步启动检测会话，避免阻塞UI
+    QtConcurrent::run([this]() {
+      auto sessionManager = DetectionSessionManager::getInstance();
+      sessionManager->startDetectionSession();
+    });
+
     bool dvStarted = false;
     bool dvsStarted = false;
 
@@ -1616,6 +1660,12 @@ void MainWindow::onDetectionToggled(bool enabled) {
   } else {
     qDebug() << "禁用检测功能，停止推理线程";
 
+    // 异步结束检测会话，避免阻塞UI
+    QtConcurrent::run([this]() {
+      auto sessionManager = DetectionSessionManager::getInstance();
+      sessionManager->endDetectionSession();
+    });
+
     bool dvStopped = true;
     bool dvsStopped = true;
 
@@ -1657,6 +1707,17 @@ void MainWindow::onDetectionToggled(bool enabled) {
   updateDetectionStatusLabels(enabled);
 
   qDebug() << "检测状态切换完成:" << (enabled ? "已启用" : "已禁用");
+}
+
+void MainWindow::resetDetectionSession() {
+  qDebug() << "手动重置检测会话";
+
+  // 异步重置检测会话，避免阻塞UI
+  QtConcurrent::run([this]() {
+    auto sessionManager = DetectionSessionManager::getInstance();
+    sessionManager->resetDetectionSession();
+    qDebug() << "检测会话重置完成";
+  });
 }
 
 // 统一的检测状态标签更新方法

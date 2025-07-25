@@ -101,6 +101,7 @@ add_executable(TwoCamera
     CountTimer.cpp CountTimer.h
     camera/CameraLogger.cpp camera/CameraLogger.h PlaybackReader.cpp PlaybackReader.h
     camera/FileSaveManager.cpp camera/FileSaveManager.h
+    camera/DetectionSessionManager.cpp camera/DetectionSessionManager.h
     camera/CameraConfig.cpp camera/CameraConfig.h
     dvs/DvsDataSegment.h BlockingQueue.h 
     socket/modbussocket.cpp socket/modbussocket.h

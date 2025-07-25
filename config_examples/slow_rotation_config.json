@@ -26,6 +26,7 @@
     "enabled": false,
     "saveDetectionImages": true,
     "detectionImagePath": "detection_results",
+    "createSessionFolders": false,
     "time_window_ms": 100,
     "output_file": "detection_results.txt",
     "models": {

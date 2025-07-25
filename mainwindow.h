@@ -92,6 +92,7 @@ private slots:
 
   // 检测状态管理方法
   void updateDetectionStatusLabels(bool enabled);
+  void resetDetectionSession();
   
   // 新增三种类型录制的槽函数
   void handleStartMaxRecord();

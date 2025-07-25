@@ -5,10 +5,12 @@
 
 #include "FileSaveManager.h"
 #include "RecordingConfig.h"
+#include "DetectionSessionManager.h"
 #include <QDebug>
 #include <QDir>
 #include <QFileInfo>
 #include <QTextStream>
+#include <QDateTime>
 #include <QMutexLocker>
 #include <QDateTime>
 #include <chrono>
@@ -129,9 +131,7 @@ bool FileSaveWorker::saveOpenCVImage(const cv::Mat &image, const QString &filePa
     
     try {
         bool result = cv::imwrite(filePath.toStdString(), image);
-        if (result) {
-            qDebug() << "图像保存成功:" << filePath;
-        } else {
+        if (!result) {
             qDebug() << "图像保存失败:" << filePath;
         }
         return result;
@@ -148,9 +148,7 @@ bool FileSaveWorker::saveQImage(const QImage &image, const QString &filePath) {
     }
     
     bool result = image.save(filePath);
-    if (result) {
-        qDebug() << "QImage保存成功:" << filePath;
-    } else {
+    if (!result) {
         qDebug() << "QImage保存失败:" << filePath;
     }
     return result;
@@ -166,8 +164,7 @@ bool FileSaveWorker::saveTextFile(const QString &content, const QString &filePat
     QTextStream out(&file);
     out << content;
     file.close();
-    
-    qDebug() << "文本文件保存成功:" << filePath;
+
     return true;
 }
 
@@ -357,6 +354,14 @@ void FileSaveManager::saveDetectionImageWithThrottling(const QImage &image, cons
         return;
     }
 
+    // 获取检测会话管理器
+    auto sessionManager = DetectionSessionManager::getInstance();
+
+    // 检查是否应该保存检测图片
+    if (!sessionManager->shouldSaveDetectionImages()) {
+        return;
+    }
+
     // 获取当前时间戳（毫秒）
     uint64_t currentTime = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
@@ -381,22 +386,23 @@ void FileSaveManager::saveDetectionImageWithThrottling(const QImage &image, cons
     // 更新最后保存时间
     lastSaveTime->store(currentTime);
 
-    // 获取录制配置并生成文件路径
-    auto recordingConfig = RecordingConfig::getInstance();
-    QString sessionPath = recordingConfig->getCurrentSessionPath();
+    // 使用检测会话管理器获取检测结果路径
+    QString detectResultPath = sessionManager->getDetectionResultPath(cameraType);
 
-    if (sessionPath.isEmpty()) {
-        // 创建专门的检测结果会话
-        QString timestampStr = QDateTime::currentDateTime().toString("yyyy-MM-dd_HH-mm-ss");
-        sessionPath = recordingConfig->createRecordingSession(timestampStr + "_detect");
+    if (detectResultPath.isEmpty()) {
+        qDebug() << "检测结果路径为空，跳过保存";
+        return;
     }
 
-    // 创建检测结果图片保存目录
-    QString detectResultPath = sessionPath + "/detection_results/" + cameraType.toLower();
-
-    // 生成文件名
+    // 生成文件名 - 格式: {源文件夹名称}_{相机类型}_detection_{时间戳}_{微秒时间戳}.png
+    QString sourceFolderName = sessionManager->getSourceFolderName();
     QString timestampStr = QDateTime::currentDateTime().toString("yyyy-MM-dd_HH-mm-ss-zzz");
-    QString filename = QString("%1/%2_detection_%3.png").arg(detectResultPath).arg(cameraType.toLower()).arg(timestampStr);
+    QString filename = QString("%1/%2_%3_detection_%4_%5.png")
+                      .arg(detectResultPath)
+                      .arg(sourceFolderName)
+                      .arg(cameraType.toLower())
+                      .arg(timestampStr)
+                      .arg(timestamp);
 
     // 异步保存
     if (cameraType == "DV") {

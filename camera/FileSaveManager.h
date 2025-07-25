@@ -16,6 +16,9 @@
 #include <atomic>
 #include <memory>
 
+// 前向声明
+class DetectionSessionManager;
+
 // 文件保存任务结构体
 struct FileSaveTask {
     enum TaskType {
