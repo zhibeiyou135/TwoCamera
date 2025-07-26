@@ -66,13 +66,16 @@ public:
     
     // 添加自动录制配置参数
     int autoRecording_x1;
-    int autoRecording_x2;  
+    int autoRecording_x2;
     int autoRecording_x3;
     int autoRecording_x4;  // 添加第四个X轴位置
     int autoRecording_y;
     int autoRecording_z;   // 添加Z轴位置参数
     int autoRecording_totalDiscs;
     QString autoRecording_basePath;
+
+    // 自动录制状态跟踪
+    int currentDiscNumber;
     
     void run();
 public slots:
@@ -130,7 +133,16 @@ public slots:
     void performAutoRecording();
     void recordSingleDisc(int discNumber);
     void recordAtPosition(int xPosition, const QString& suffix);
+    void executeRotationSequence();
+    void recordNextDisc();
     void loadAutoRecordingConfig();
+
+    // 添加无通讯自动录制方法
+    void performAutoRecordingNoComm();
+    void recordSingleDiscNoComm(int discNumber);
+    void recordAtPositionNoComm(int xPosition, const QString& suffix);
+    void executeRotationSequenceNoComm();
+    void recordNextDiscNoComm();
     
     // 添加X1-X4位置的录制和移动功能
     void recordAtX1();    // X1位置录制

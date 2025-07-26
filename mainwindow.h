@@ -192,6 +192,7 @@ private:
   
   // 添加自动录制按钮指针
   QPushButton *autoRecordingButton;
+  QPushButton *autoRecordingNoCommButton;
   
   // 添加新的控件指针
   QPushButton *testDetectFinallyButton;

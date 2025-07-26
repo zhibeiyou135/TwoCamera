@@ -7,6 +7,7 @@
 #include <QDebug>
 #include <atomic>
 #include <mutex>
+#include <QtConcurrent/QtConcurrent>
 
 class RecordingConfig {
 public:
@@ -82,29 +83,34 @@ public:
             currentSessionPath = QDir(basePath).absoluteFilePath(timestamp);
         }
         
-        // 创建主录制文件夹
-        QDir().mkpath(currentSessionPath);
+        // 异步创建录制文件夹，避免阻塞
+        QtConcurrent::run([this, sessionPath = currentSessionPath, suffix = sessionSuffix]() {
+            // 创建主录制文件夹
+            QDir().mkpath(sessionPath);
 
-        // 创建子文件夹
-        if (saveDVOriginal.load()) {
-            QDir().mkpath(currentSessionPath + "/dv_original");
-        }
-        if (saveDVCropped.load()) {
-            QDir().mkpath(currentSessionPath + "/dv_cropped");
-        }
-        if (saveDVSImages.load()) {
-            QDir().mkpath(currentSessionPath + "/dvs_images");
-        }
-        if (saveDVSRaw.load()) {
-            QDir().mkpath(currentSessionPath + "/dvs_raw");
-        }
+            // 创建子文件夹
+            if (saveDVOriginal.load()) {
+                QDir().mkpath(sessionPath + "/dv_original");
+            }
+            if (saveDVCropped.load()) {
+                QDir().mkpath(sessionPath + "/dv_cropped");
+            }
+            if (saveDVSImages.load()) {
+                QDir().mkpath(sessionPath + "/dvs_images");
+            }
+            if (saveDVSRaw.load()) {
+                QDir().mkpath(sessionPath + "/dvs_raw");
+            }
+
+            // 如果是检测相关的会话，创建检测结果目录
+            if (suffix.contains("detect", Qt::CaseInsensitive)) {
+                QDir().mkpath(sessionPath + "/detection_results");
+                QDir().mkpath(sessionPath + "/detection_results/dv");
+                QDir().mkpath(sessionPath + "/detection_results/dvs");
+            }
+        });
         
-        // 如果是检测相关的会话，创建检测结果目录
-        if (sessionSuffix.contains("detect", Qt::CaseInsensitive)) {
-            QDir().mkpath(currentSessionPath + "/detection_results");
-            QDir().mkpath(currentSessionPath + "/detection_results/dv");
-            QDir().mkpath(currentSessionPath + "/detection_results/dvs");
-        }
+
         return currentSessionPath;
     }
 

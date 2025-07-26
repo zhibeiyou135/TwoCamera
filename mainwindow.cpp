@@ -75,6 +75,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
   auto vboxLayout = new QVBoxLayout();
   auto openCameraButton = new QPushButton(tr("启动相机"));
   autoRecordingButton = new QPushButton(tr("自动录制模式"));
+  autoRecordingNoCommButton = new QPushButton(tr("自动录制（无通讯）"));
   // auto q_openButton = new QPushButton(tr("松开"));
   // auto q_closeButton = new QPushButton(tr("抓取"));
   // auto rotateButton = new QPushButton(tr("旋转"));
@@ -133,6 +134,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
 
   buttonLayout->addWidget(openCameraButton);
   buttonLayout->addWidget(autoRecordingButton);
+  buttonLayout->addWidget(autoRecordingNoCommButton);
   // buttonLayout->addWidget(q_openButton);
   // buttonLayout->addWidget(q_closeButton);
   // buttonLayout->addWidget(rotateButton);
@@ -577,24 +579,49 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
   // 连接自动录制模式按钮
   connect(autoRecordingButton, &QPushButton::clicked, this, [this]() {
     qDebug() << "自动录制模式按钮被点击";
-    
+
     // 询问用户确认
-    QMessageBox::StandardButton reply = QMessageBox::question(this, 
-        "自动录制确认", 
+    QMessageBox::StandardButton reply = QMessageBox::question(this,
+        "自动录制确认",
         "即将开始自动录制25张盘片的流程，每张盘片将在3个位置(min/mid/max)进行录制。\n"
         "此过程将耗时较长，确认开始吗？",
         QMessageBox::Yes | QMessageBox::No);
-    
+
     if (reply == QMessageBox::Yes) {
       qDebug() << "用户确认开始自动录制，在后台线程执行";
       autoRecordingButton->setDisabled(true);
       autoRecordingButton->setText("自动录制中...");
-      
+
       QtConcurrent::run([this]() {
         socket->performAutoRecording();
       });
       } else {
       qDebug() << "用户取消自动录制";
+    }
+  });
+
+  // 连接无通讯自动录制模式按钮
+  connect(autoRecordingNoCommButton, &QPushButton::clicked, this, [this]() {
+    qDebug() << "无通讯自动录制模式按钮被点击";
+
+    // 询问用户确认
+    QMessageBox::StandardButton reply = QMessageBox::question(this,
+        "无通讯自动录制确认",
+        "即将开始无通讯模式的自动录制测试，将模拟25张盘片的录制流程。\n"
+        "此模式不会进行实际的硬件操作，仅测试软件逻辑和UI响应性。\n"
+        "确认开始测试吗？",
+        QMessageBox::Yes | QMessageBox::No);
+
+    if (reply == QMessageBox::Yes) {
+      qDebug() << "用户确认开始无通讯自动录制测试，在后台线程执行";
+      autoRecordingNoCommButton->setDisabled(true);
+      autoRecordingNoCommButton->setText("无通讯录制中...");
+
+      QtConcurrent::run([this]() {
+        socket->performAutoRecordingNoComm();
+      });
+    } else {
+      qDebug() << "用户取消无通讯自动录制测试";
     }
   });
   
@@ -1994,17 +2021,28 @@ void MainWindow::initializeModbusConnection() {
   connect(socket, &modbusSocket::autoRecordingComplete, this, [this]() {
     qDebug() << "自动录制流程完成";
     QMessageBox::information(this, "自动录制完成", "25张盘片的自动录制流程已完成！");
-    
+
     // 恢复按钮状态
     if (autoRecordingButton) {
       autoRecordingButton->setEnabled(true);
       autoRecordingButton->setText("自动录制模式");
     }
+    if (autoRecordingNoCommButton) {
+      autoRecordingNoCommButton->setEnabled(true);
+      autoRecordingNoCommButton->setText("自动录制（无通讯）");
+    }
   });
   
   connect(socket, &modbusSocket::discRecordingComplete, this, [this](int discNumber) {
     qDebug() << "第" << discNumber << "张盘片录制完成";
-    // 可以在这里更新UI显示进度
+
+    // 更新按钮文本显示进度
+    if (autoRecordingButton && !autoRecordingButton->isEnabled()) {
+      autoRecordingButton->setText(QString("自动录制中... (%1/25)").arg(discNumber));
+    }
+    if (autoRecordingNoCommButton && !autoRecordingNoCommButton->isEnabled()) {
+      autoRecordingNoCommButton->setText(QString("无通讯录制中... (%1/25)").arg(discNumber));
+    }
   });
   
   // 连接socket的录制信号到相机录制功能

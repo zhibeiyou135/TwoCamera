@@ -2,6 +2,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QFile>
+#include <QTimer>
 #include "camera/ConfigManager.h"
 #include "camera/RecordingConfig.h"
 
@@ -705,14 +706,16 @@ void modbusSocket::executeRotationCycle() {
             
             if (isLoopRotating) {  // 检查是否仍在循环中
                 qDebug() << "正向旋转完成，等待1秒...";
-                std::this_thread::sleep_for(std::chrono::seconds(1));
-                qDebug() << "1秒等待完成，切换到反向旋转";
-                isForwardRotation = false;
-                
-                // 1秒后执行反向旋转
-                if (isLoopRotating) {
-                    QMetaObject::invokeMethod(this, "executeRotationCycle", Qt::QueuedConnection);
-                }
+                // 使用QTimer替代阻塞等待
+                QTimer::singleShot(1000, [this]() {
+                    qDebug() << "1秒等待完成，切换到反向旋转";
+                    isForwardRotation = false;
+
+                    // 1秒后执行反向旋转
+                    if (isLoopRotating) {
+                        QMetaObject::invokeMethod(this, "executeRotationCycle", Qt::QueuedConnection);
+                    }
+                });
             }
         } else {
             qDebug() << "开始执行反向旋转";
@@ -720,14 +723,16 @@ void modbusSocket::executeRotationCycle() {
             
             if (isLoopRotating) {  // 检查是否仍在循环中
                 qDebug() << "反向旋转完成，等待1秒...";
-                std::this_thread::sleep_for(std::chrono::seconds(1));
-                qDebug() << "1秒等待完成，切换到正向旋转";
-                isForwardRotation = true;
-                
-                // 1秒后执行正向旋转
-                if (isLoopRotating) {
-                    QMetaObject::invokeMethod(this, "executeRotationCycle", Qt::QueuedConnection);
-                }
+                // 使用QTimer替代阻塞等待
+                QTimer::singleShot(1000, [this]() {
+                    qDebug() << "1秒等待完成，切换到正向旋转";
+                    isForwardRotation = true;
+
+                    // 1秒后执行正向旋转
+                    if (isLoopRotating) {
+                        QMetaObject::invokeMethod(this, "executeRotationCycle", Qt::QueuedConnection);
+                    }
+                });
             }
         }
         qDebug() << "=== 旋转循环执行完成 ===";
@@ -833,13 +838,15 @@ void modbusSocket::executeTrainingRotationCycle() {
             
             if (isLoopRotating) {
                 qDebug() << "正向旋转完成，等待1秒...";
-                std::this_thread::sleep_for(std::chrono::seconds(1));
-                qDebug() << "1秒等待完成，切换到反向旋转";
-                isForwardRotation = false;
-                
-                if (isLoopRotating) {
-                    QMetaObject::invokeMethod(this, "executeTrainingRotationCycle", Qt::QueuedConnection);
-                }
+                // 使用QTimer替代阻塞等待
+                QTimer::singleShot(1000, [this]() {
+                    qDebug() << "1秒等待完成，切换到反向旋转";
+                    isForwardRotation = false;
+
+                    if (isLoopRotating) {
+                        QMetaObject::invokeMethod(this, "executeTrainingRotationCycle", Qt::QueuedConnection);
+                    }
+                });
             }
         } else {
             qDebug() << "开始执行反向旋转";
@@ -847,13 +854,15 @@ void modbusSocket::executeTrainingRotationCycle() {
             
             if (isLoopRotating) {
                 qDebug() << "反向旋转完成，等待1秒...";
-                std::this_thread::sleep_for(std::chrono::seconds(1));
-                qDebug() << "1秒等待完成，切换到正向旋转";
-                isForwardRotation = true;
-                
-                if (isLoopRotating) {
-                    QMetaObject::invokeMethod(this, "executeTrainingRotationCycle", Qt::QueuedConnection);
-                }
+                // 使用QTimer替代阻塞等待
+                QTimer::singleShot(1000, [this]() {
+                    qDebug() << "1秒等待完成，切换到正向旋转";
+                    isForwardRotation = true;
+
+                    if (isLoopRotating) {
+                        QMetaObject::invokeMethod(this, "executeTrainingRotationCycle", Qt::QueuedConnection);
+                    }
+                });
             }
         }
         qDebug() << "=== 训练旋转循环执行完成 ===";
@@ -906,23 +915,42 @@ void modbusSocket::performAutoRecording() {
     // qDebug() << "执行初始化操作：开始";
     // begin();
     // std::this_thread::sleep_for(std::chrono::seconds(2));
-    // 循环录制指定数量的盘片
-    for (int discNum = 1; discNum <= this->autoRecording_totalDiscs; discNum++) {
-        qDebug() << "=== 开始录制第" << discNum << "张盘片 ===";
-        recordSingleDisc(discNum);
-        qDebug() << "=== 第" << discNum << "张盘片录制完成 ===";
-        
-        // 发送检测完成信号
-        testDetectFinally();
-        
-        // 如果不是最后一张盘片，等待一段时间再继续
-        if (discNum < this->autoRecording_totalDiscs) {
-            std::this_thread::sleep_for(std::chrono::seconds(35));
-        }
+    // 初始化当前盘片计数器
+    currentDiscNumber = 1;
+
+    // 开始录制第一张盘片
+    recordNextDisc();
+}
+
+// 非阻塞的录制下一张盘片方法
+void modbusSocket::recordNextDisc() {
+    if (currentDiscNumber > this->autoRecording_totalDiscs) {
+        qDebug() << "=== 自动录制流程完成，共录制" << this->autoRecording_totalDiscs << "张盘片 ===";
+        emit autoRecordingComplete();
+        return;
     }
-    
-    qDebug() << "=== 自动录制流程完成，共录制" << this->autoRecording_totalDiscs << "张盘片 ===";
-    emit autoRecordingComplete();
+
+    qDebug() << "=== 开始录制第" << currentDiscNumber << "张盘片 ===";
+    recordSingleDisc(currentDiscNumber);
+    qDebug() << "=== 第" << currentDiscNumber << "张盘片录制完成 ===";
+
+    // 发送检测完成信号
+    testDetectFinally();
+
+    // 发送盘片录制完成信号
+    emit discRecordingComplete(currentDiscNumber);
+
+    // 增加盘片计数器
+    currentDiscNumber++;
+
+    // 如果不是最后一张盘片，使用QTimer等待后继续
+    if (currentDiscNumber <= this->autoRecording_totalDiscs) {
+        QTimer::singleShot(35000, [this]() {
+            recordNextDisc();
+        });
+    } else {
+        emit autoRecordingComplete();
+    }
 }
 
 // 录制单张盘片
@@ -986,43 +1014,55 @@ void modbusSocket::recordAtPosition(int xPosition, const QString& suffix) {
     
     // 获取录制配置实例
     auto recordingConfig = RecordingConfig::getInstance();
-    
-    // 保存当前的基础路径
+
+    // 临时保存当前的基础路径，但不频繁修改
     QString originalBasePath = recordingConfig->getBasePath();
-    qDebug() << "保存原始基础路径:" << originalBasePath;
-    
-    // 设置自动录制的基础路径
-    recordingConfig->setBasePath(this->autoRecording_basePath);
-    qDebug() << "设置自动录制基础路径为:" << this->autoRecording_basePath;
+
+    // 只在必要时设置自动录制的基础路径
+    if (recordingConfig->getBasePath() != this->autoRecording_basePath) {
+        recordingConfig->setBasePath(this->autoRecording_basePath);
+        qDebug() << "设置自动录制基础路径为:" << this->autoRecording_basePath;
+    }
     
     // 在开始正向旋转前启动录制
     qDebug() << "准备开始旋转，发送录制开始信号，后缀:" << fullSuffix;
     emit startRecord(fullSuffix);
     
-    // 等待录制系统启动
-    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-    qDebug() << "录制系统已启动，开始旋转过程";
+    // 使用QTimer替代阻塞等待，避免UI卡死
+    QTimer::singleShot(1000, [this, xPosition, suffix]() {
+        qDebug() << "录制系统已启动，开始旋转过程";
+        executeRotationSequence();
+    });
     
+    // 旋转序列现在在executeRotationSequence中执行
+
+    // 恢复原来的基础路径
+    recordingConfig->setBasePath(originalBasePath);
+    qDebug() << "恢复原始基础路径:" << originalBasePath;
+
+    qDebug() << "=== 位置" << xPosition << "录制完成 ===";
+}
+
+// 执行旋转序列的非阻塞方法
+void modbusSocket::executeRotationSequence() {
+    qDebug() << "开始执行旋转序列";
+
     // 执行正反旋转（录制整个旋转过程）
     qDebug() << "开始正向旋转（录制中）";
     rotate();   // 正向旋转
     qDebug() << "正向旋转完成，开始反向旋转（录制中）";
     revent();   // 反向旋转
     qDebug() << "反向旋转完成，旋转过程结束";
-    
+
     // 旋转完成后停止录制
     qDebug() << "旋转过程完成，发送录制停止信号";
     emit stopRecord();
-    
-    // 等待录制系统完全停止
-    std::this_thread::sleep_for(std::chrono::milliseconds(2000));
-    qDebug() << "录制系统已停止";
-    
-    // 恢复原来的基础路径
-    recordingConfig->setBasePath(originalBasePath);
-    qDebug() << "恢复原始基础路径:" << originalBasePath;
-    
-    qDebug() << "=== 位置" << xPosition << "录制完成 ===";
+
+    // 使用QTimer替代阻塞等待
+    QTimer::singleShot(2000, [this]() {
+        qDebug() << "录制系统已停止";
+        // 可以在这里发送录制完成信号或执行其他后续操作
+    });
 }
 
 // 加载自动录制配置
@@ -1100,6 +1140,151 @@ void modbusSocket::loadAutoRecordingConfig() {
     qDebug() << "=== 自动录制配置加载完成 ===";
 }
 
+// 无通讯自动录制主流程
+void modbusSocket::performAutoRecordingNoComm() {
+    qDebug() << "=== 开始无通讯自动录制流程 ===";
+    qDebug() << "将模拟录制" << this->autoRecording_totalDiscs << "张盘片（无实际硬件操作）";
+
+    // 初始化当前盘片计数器
+    currentDiscNumber = 1;
+
+    // 开始录制第一张盘片
+    recordNextDiscNoComm();
+}
+
+// 无通讯模式的录制下一张盘片方法
+void modbusSocket::recordNextDiscNoComm() {
+    if (currentDiscNumber > this->autoRecording_totalDiscs) {
+        qDebug() << "=== 无通讯自动录制流程完成，共模拟录制" << this->autoRecording_totalDiscs << "张盘片 ===";
+        emit autoRecordingComplete();
+        return;
+    }
+
+    qDebug() << "=== 开始模拟录制第" << currentDiscNumber << "张盘片 ===";
+    recordSingleDiscNoComm(currentDiscNumber);
+    qDebug() << "=== 第" << currentDiscNumber << "张盘片模拟录制完成 ===";
+
+    // 模拟检测完成信号（无实际硬件操作）
+    qDebug() << "模拟检测完成信号";
+
+    // 发送盘片录制完成信号
+    emit discRecordingComplete(currentDiscNumber);
+
+    // 增加盘片计数器
+    currentDiscNumber++;
+
+    // 如果不是最后一张盘片，使用QTimer等待后继续
+    if (currentDiscNumber <= this->autoRecording_totalDiscs) {
+        // 使用较短的等待时间进行快速测试（5秒而不是35秒）
+        QTimer::singleShot(5000, [this]() {
+            recordNextDiscNoComm();
+        });
+    } else {
+        emit autoRecordingComplete();
+    }
+}
+
+// 无通讯模式的录制单张盘片
+void modbusSocket::recordSingleDiscNoComm(int discNumber) {
+    qDebug() << "=== 模拟录制第" << discNumber << "张盘片 ===";
+
+    // 使用配置文件中的位置参数
+    int x1 = this->autoRecording_x1;  // min位置
+    int x2 = this->autoRecording_x2;  // mid位置
+    int x3 = this->autoRecording_x3;  // max位置
+    int y = this->autoRecording_y;    // Y轴位置
+    int z = this->autoRecording_z;    // Z轴位置
+
+    qDebug() << "模拟使用配置参数: x1=" << x1 << " x2=" << x2 << " x3=" << x3 << " y=" << y << " z=" << z;
+
+    // 模拟设置Y轴位置（无实际硬件操作）
+    qDebug() << "模拟设置Y轴位置到:" << y;
+
+    // 模拟设置Z轴位置（无实际硬件操作）
+    qDebug() << "模拟设置Z轴位置到:" << z;
+
+    // 第一个位置：x1 (min)
+    qDebug() << "模拟移动到第一个位置 x1:" << x1;
+    recordAtPositionNoComm(x1, QString::number(discNumber) + "_x1");
+
+    // 第二个位置：x2 (mid)
+    qDebug() << "模拟移动到第二个位置 x2:" << x2;
+    recordAtPositionNoComm(x2, QString::number(discNumber) + "_x2");
+
+    // 第三个位置：x3 (max)
+    qDebug() << "模拟移动到第三个位置 x3:" << x3;
+    recordAtPositionNoComm(x3, QString::number(discNumber) + "_x3");
+
+    qDebug() << "=== 第" << discNumber << "张盘片的3个位置模拟录制完成 ===";
+}
+
+// 无通讯模式的在指定位置录制
+void modbusSocket::recordAtPositionNoComm(int xPosition, const QString& suffix) {
+    qDebug() << "=== 模拟在位置" << xPosition << "录制，后缀:" << suffix << " ===";
+
+    // 模拟移动到指定X轴位置（无实际硬件操作）
+    qDebug() << "模拟移动X轴到目标位置" << xPosition << "（无实际硬件操作）";
+
+    // 模拟移动Z轴到配置的位置（无实际硬件操作）
+    qDebug() << "模拟移动Z轴到配置位置" << this->autoRecording_z << "（无实际硬件操作）";
+
+    // 构造完整的录制路径信息，包含自动录制的基础路径
+    QString fullSuffix = QString("auto_%1").arg(suffix);
+    qDebug() << "构造的完整后缀:" << fullSuffix;
+
+    // 获取录制配置实例
+    auto recordingConfig = RecordingConfig::getInstance();
+
+    // 临时保存当前的基础路径，但不频繁修改
+    QString originalBasePath = recordingConfig->getBasePath();
+
+    // 只在必要时设置自动录制的基础路径
+    if (recordingConfig->getBasePath() != this->autoRecording_basePath) {
+        recordingConfig->setBasePath(this->autoRecording_basePath);
+        qDebug() << "设置自动录制基础路径为:" << this->autoRecording_basePath;
+    }
+
+    // 在开始正向旋转前启动录制
+    qDebug() << "准备开始模拟旋转，发送录制开始信号，后缀:" << fullSuffix;
+    emit startRecord(fullSuffix);
+
+    // 使用QTimer模拟录制系统启动等待时间
+    QTimer::singleShot(1000, [this, originalBasePath, recordingConfig]() {
+        qDebug() << "模拟录制系统已启动，开始模拟旋转过程";
+        executeRotationSequenceNoComm();
+
+        // 模拟整个旋转序列完成后的等待时间（正向+反向旋转总时间）
+        QTimer::singleShot(6000, [this, originalBasePath, recordingConfig]() {
+            qDebug() << "模拟旋转过程完成，发送录制停止信号";
+            emit stopRecord();
+
+            // 恢复原来的基础路径
+            recordingConfig->setBasePath(originalBasePath);
+            qDebug() << "恢复原始基础路径:" << originalBasePath;
+        });
+    });
+
+    qDebug() << "=== 位置" << xPosition << "模拟录制完成 ===";
+}
+
+// 无通讯模式的执行旋转序列方法
+void modbusSocket::executeRotationSequenceNoComm() {
+    qDebug() << "开始执行模拟旋转序列（无实际硬件操作）";
+
+    // 模拟正向旋转时间（通常需要几秒钟）
+    qDebug() << "开始模拟正向旋转（录制中）";
+
+    // 使用QTimer模拟正向旋转的时间
+    QTimer::singleShot(3000, [this]() {
+        qDebug() << "模拟正向旋转完成，开始模拟反向旋转（录制中）";
+
+        // 使用QTimer模拟反向旋转的时间
+        QTimer::singleShot(3000, [this]() {
+            qDebug() << "模拟反向旋转完成，旋转过程结束";
+        });
+    });
+}
+
 
 // X1-X4位置的录制功能实现
 void modbusSocket::recordAtX1() {
@@ -1115,15 +1300,15 @@ void modbusSocket::recordAtX1() {
     // 开始录制
     emit startRecord("manual_x1");
     
-    // 等待录制系统启动
-    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-    
-    // 执行旋转录制
-    rotate();   // 正向旋转
-    revent();   // 反向旋转
-    
-    // 停止录制
-    emit stopRecord();
+    // 使用QTimer替代阻塞等待
+    QTimer::singleShot(1000, [this]() {
+        // 执行旋转录制
+        rotate();   // 正向旋转
+        revent();   // 反向旋转
+
+        // 停止录制
+        emit stopRecord();
+    });
     
     qDebug() << "=== X1位置录制完成 ===";
 }
@@ -1141,15 +1326,15 @@ void modbusSocket::recordAtX2() {
     // 开始录制
     emit startRecord("manual_x2");
     
-    // 等待录制系统启动
-    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-    
-    // 执行旋转录制
-    rotate();   // 正向旋转
-    revent();   // 反向旋转
-    
-    // 停止录制
-    emit stopRecord();
+    // 使用QTimer替代阻塞等待
+    QTimer::singleShot(1000, [this]() {
+        // 执行旋转录制
+        rotate();   // 正向旋转
+        revent();   // 反向旋转
+
+        // 停止录制
+        emit stopRecord();
+    });
     
     qDebug() << "=== X2位置录制完成 ===";
 }
@@ -1167,15 +1352,15 @@ void modbusSocket::recordAtX3() {
     // 开始录制
     emit startRecord("manual_x3");
     
-    // 等待录制系统启动
-    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-    
-    // 执行旋转录制
-    rotate();   // 正向旋转
-    revent();   // 反向旋转
-    
-    // 停止录制
-    emit stopRecord();
+    // 使用QTimer替代阻塞等待
+    QTimer::singleShot(1000, [this]() {
+        // 执行旋转录制
+        rotate();   // 正向旋转
+        revent();   // 反向旋转
+
+        // 停止录制
+        emit stopRecord();
+    });
     
     qDebug() << "=== X3位置录制完成 ===";
 }
@@ -1193,15 +1378,15 @@ void modbusSocket::recordAtX4() {
     // 开始录制
     emit startRecord("manual_x4");
     
-    // 等待录制系统启动
-    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-    
-    // 执行旋转录制
-    rotate();   // 正向旋转
-    revent();   // 反向旋转
-    
-    // 停止录制
-    emit stopRecord();
+    // 使用QTimer替代阻塞等待
+    QTimer::singleShot(1000, [this]() {
+        // 执行旋转录制
+        rotate();   // 正向旋转
+        revent();   // 反向旋转
+
+        // 停止录制
+        emit stopRecord();
+    });
     
     qDebug() << "=== X4位置录制完成 ===";
 }
